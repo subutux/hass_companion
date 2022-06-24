@@ -30,7 +30,7 @@ func StartHttpServer() (Credentials, error) {
 		creds.Server = state
 		creds.Token = code
 		creds.ClientId = "http://localhost:9999"
-		io.WriteString(w, "Thanks!\n")
+		io.WriteString(w, "Authentication successfull! You may close this window.\n")
 
 		go func() {
 			if err := server.Shutdown(context.Background()); err != nil {
