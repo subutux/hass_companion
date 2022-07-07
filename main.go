@@ -54,7 +54,7 @@ func main() {
 		d := dialog.NewEntryDialog("Connect", "home assistant url:", func(url string) {
 			config.Set("server", url)
 			config.Save()
-			Start(statusStringLabel, Events, EventCount, w)
+			Start(statusStringLabel, Events, EventCount, w, a)
 		}, w)
 		w.Resize(fyne.Size{
 			Width:  600,
@@ -68,13 +68,13 @@ func main() {
 		w.RequestFocus()
 	} else {
 
-		Start(statusStringLabel, Events, EventCount, w)
+		Start(statusStringLabel, Events, EventCount, w, a)
 	}
 	w.ShowAndRun()
 	homeAssistant.Close()
 }
 
-func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *widget.Label, w fyne.Window) {
+func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *widget.Label, w fyne.Window, a fyne.App) {
 	go func() {
 		server, err := url.Parse(config.Get("server"))
 		var creds auth.Credentials
@@ -101,6 +101,9 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 
 		statusStringLabel.SetText("Connecting ...")
 		homeAssistant = hass.NewHass(server.String(), creds)
+		homeAssistant.Socket.OnDisconnect = func() {
+			a.Quit()
+		}
 		homeAssistant.Connect()
 		for !homeAssistant.Connected {
 			time.Sleep(time.Second * 1)
@@ -124,6 +127,8 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 		device.SetupPush(func(notification *hass.PushNotification) {
 			beeep.Notify(notification.Event.Title, notification.Event.Message, "")
 		})
+
+		// go homeAssistant.Ping()
 		// pp.Println(mobile_device)
 	}()
 }

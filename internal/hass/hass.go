@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -20,15 +21,37 @@ type AuthMessage struct {
 	AccessToken string `json:"access_token"`
 }
 
-type Command struct {
+type Result struct {
+	ID      int    `json:"id"`
+	Type    string `json:"type"`
+	Success bool   `json:"success"`
+	Error   struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+type Command interface {
+	SetID(id int)
+}
+
+type BasicCommand struct {
 	ID   int    `json:"id"`
 	Type string `json:"type"`
+}
+
+func (b *BasicCommand) SetID(id int) {
+	b.ID = id
 }
 
 type CommandSubscribeEvents struct {
 	ID        int    `json:"id"`
 	Type      string `json:"type"`
 	EventType string `json:"event_type"`
+}
+
+func (b *CommandSubscribeEvents) SetID(id int) {
+	b.ID = id
 }
 
 type ServerResponseMessage struct {
@@ -42,6 +65,7 @@ type Hass struct {
 
 	Connected bool
 	ticker    *time.Ticker
+	mu        sync.Mutex
 	lastId    int
 
 	eventHandlers map[string][]ws.MessageHandler
@@ -92,6 +116,7 @@ func (h *Hass) registerRoutes() {
 	h.Socket.RegisterHandler("auth_ok", h.wsLoginSuccessfull)
 	h.Socket.RegisterHandler("pong", h.pong)
 	h.Socket.RegisterHandler("event", h.routeEvent)
+	h.Socket.RegisterHandler("result", h.resultHandler)
 }
 
 func (h *Hass) Connect() {
@@ -105,15 +130,19 @@ func (h *Hass) Close() {
 	h.Socket.Destroy()
 }
 
-func (h *Hass) ping() {
+func (h *Hass) Ping() {
 	h.ticker = time.NewTicker(PING_PERIOD)
 	defer h.ticker.Stop()
 	for ; ; <-h.ticker.C {
-		h.Socket.Send(Command{
-			ID:   0,
+		h.SendCommand(&BasicCommand{
 			Type: "ping",
 		})
 	}
+}
+
+func (h *Hass) SendCommand(cmd Command) {
+	cmd.SetID(h.NextID())
+	h.Socket.Send(cmd)
 }
 
 func (h *Hass) pong(message []byte, conn *ws.Websocket) {
@@ -134,6 +163,15 @@ func (h *Hass) routePossiblePushNotification(id int, message []byte, conn *ws.We
 		}
 	}
 
+}
+
+func (h *Hass) resultHandler(message []byte, conn *ws.Websocket) {
+	var result Result
+	json.Unmarshal(message, &result)
+	if !result.Success {
+		log.Printf("Result failed: %s : %s", result.Error.Code, result.Error.Message)
+		h.Socket.Destroy()
+	}
 }
 
 func (h *Hass) routeEvent(message []byte, conn *ws.Websocket) {
@@ -163,16 +201,14 @@ func (h *Hass) wsLoginSuccessfull(message []byte, conn *ws.Websocket) {
 }
 
 func (h *Hass) SubscribeToEventType(eventType string, f ws.MessageHandler) {
-	id := h.lastId + 1
-	h.Socket.Send(CommandSubscribeEvents{
-		ID:        id,
+
+	h.SendCommand(&CommandSubscribeEvents{
 		Type:      "subscribe_events",
 		EventType: eventType,
 	})
 
 	h.registerEventHandler(eventType, f)
 
-	h.lastId = id
 }
 
 func (h *Hass) registerEventHandler(eventType string, f ws.MessageHandler) {
@@ -184,6 +220,8 @@ func (h *Hass) registerEventHandler(eventType string, f ws.MessageHandler) {
 }
 
 func (h *Hass) NextID() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.lastId = h.lastId + 1
 	return h.lastId
 }

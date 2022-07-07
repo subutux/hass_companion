@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/url"
+	"time"
 
 	"github.com/sacOO7/gowebsocket"
 	"github.com/subutux/hass_companion/internal/ws/messages"
@@ -15,7 +16,8 @@ type Websocket struct {
 	Endpoint url.URL
 	socket   gowebsocket.Socket
 
-	handlers map[string]MessageHandler
+	handlers     map[string]MessageHandler
+	OnDisconnect func()
 }
 
 func NewWebsocket(endpoint url.URL) *Websocket {
@@ -26,16 +28,21 @@ func NewWebsocket(endpoint url.URL) *Websocket {
 }
 
 func (w *Websocket) Destroy() {
+	if w.OnDisconnect != nil {
+		w.OnDisconnect()
+	}
 	w.socket.Close()
 }
 
 func (w *Websocket) Connect() {
 	w.socket = gowebsocket.New(w.Endpoint.String())
+	w.socket.Timeout = 2 * time.Second
 	w.socket.OnConnected = func(socket gowebsocket.Socket) {
 		log.Printf("Connected to websocket %s", w.Endpoint.String())
 	}
 	w.socket.OnConnectError = func(err error, socket gowebsocket.Socket) {
 		log.Printf("Connection failed to websocket %s: %s", w.Endpoint.String(), err)
+
 		w.Destroy()
 	}
 	w.socket.OnTextMessage = func(message string, socket gowebsocket.Socket) {
