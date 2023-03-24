@@ -2,133 +2,61 @@ package main
 
 import (
 	"log"
-	"net/url"
-	"strconv"
-	"time"
+	"os"
+	"os/signal"
+	"syscall"
 
-	"fyne.io/fyne/v2"
-	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
-	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/widget"
-	"github.com/gen2brain/beeep"
-	"github.com/subutux/hass_companion/internal/auth"
+	"github.com/k0kubun/pp/v3"
+	"github.com/subutux/hass_companion/hass/auth"
+	"github.com/subutux/hass_companion/hass/mobile_app"
+	"github.com/subutux/hass_companion/hass/rest"
+	"github.com/subutux/hass_companion/hass/ws"
 	"github.com/subutux/hass_companion/internal/config"
-	"github.com/subutux/hass_companion/internal/hass"
-	"github.com/subutux/hass_companion/internal/ws"
 )
-
-var homeAssistant *hass.Hass
-var eventCount int
 
 func main() {
 
-	a := app.New()
-	w := a.NewWindow("Status")
-
-	if desk, ok := a.(desktop.App); ok {
-		m := fyne.NewMenu("MyApp",
-			fyne.NewMenuItem("Status", func() {
-				w.Show()
-			}))
-		desk.SetSystemTrayMenu(m)
-	}
-
-	statusStringLabel := widget.NewLabel("loading")
-	EventTitle := widget.NewLabel("Events received")
-	EventTitle.TextStyle = fyne.TextStyle{
-		Bold: true,
-	}
-	EventCount := widget.NewLabel("0")
-	Events := container.New(layout.NewHBoxLayout(), EventTitle, EventCount)
-	Events.Hide()
-	w.SetContent(container.New(layout.NewVBoxLayout(), statusStringLabel, Events))
-	w.SetCloseIntercept(func() {
-		w.Hide()
-	})
-
+	waitForClose := make(chan os.Signal, 1)
+	signal.Notify(waitForClose, syscall.SIGINT, syscall.SIGTERM)
 	config.Load()
-	if config.Get("server") == "" {
-		d := dialog.NewEntryDialog("Connect", "home assistant url:", func(url string) {
-			config.Set("server", url)
-			config.Save()
-			Start(statusStringLabel, Events, EventCount, w, a)
-		}, w)
-		w.Resize(fyne.Size{
-			Width:  600,
-			Height: 400,
-		})
-		d.Resize(fyne.Size{
-			Width:  500,
-			Height: 300,
-		})
-		d.Show()
-		w.RequestFocus()
-	} else {
 
-		Start(statusStringLabel, Events, EventCount, w, a)
+	url := "wss://home.assistant.subutux.be/api/websocket"
+	accessToken := "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiIwZTFmMDNlYTE4OWE0Yzg4YjcxZGRlNGIyYjVmNjk5OCIsImlhdCI6MTY1NzEyMzA2NywiZXhwIjoxNjU3MTI0ODY3fQ.rx6Q3OE-TPwcMo6sCWP8vYavpjBP-jes3lAdwXxEgN8"
+	refreshToken := "db7f6a7ecb661a4f17d0fa383f3e5ecdfc1f82471ed8ac8bc7db6b0a1d51379532b17a486ba2a0a12c6a0a815d9d2717a4ccdf6cf891273f7305473fa2799686"
+	creds := auth.NewCredentials("https://home.assistant.subutux.be", "http://localhost:9999", accessToken, refreshToken)
+
+
+	reg := mobile_app.NewMobileAppRegistration()
+	hass, err := ws.NewClient(url, &creds)
+	if err != nil {
+		log.Printf("Error creating client: %s", err)
+		os.Exit(1)
 	}
-	w.ShowAndRun()
-	homeAssistant.Close()
-}
 
-func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *widget.Label, w fyne.Window, a fyne.App) {
-	go func() {
-		server, err := url.Parse(config.Get("server"))
-		var creds auth.Credentials
-		statusStringLabel.SetText("Retrieving authentication ...")
-		if config.Get("auth.refreshToken") == "" {
-			creds, err = auth.Initiate(server.String())
-			if err != nil {
-				log.Fatal(err)
-			}
-			config.Save()
-		} else {
-			creds = config.NewCredentialsFromConfig()
+	hass.Listen()
+	<-hass.Started
+
+	hass.SendCommand(ws.NewSubscribeToEvents("state_changed"))
+
+	rhass := rest.NewClient(&creds)
+	registration, err := rhass.RegisterMobileApp(reg)
+	config.Set("registration", *registration)
+	mobile := mobile_app.NewMobileApp(registration, hass)
+	mobile.EnableWebsocketPushNotifications()
+	go mobile.WatchForPushNotifications(func(notification *ws.IncomingPushNotificationMessage) {
+		pp.Println(notification)
+	})
+	go hass.MonitorConnection()
+	for {
+		select {
+		case <-waitForClose:
+			hass.Close()
+			return
+		case <-hass.PongTimeoutChannel:
+			// TODO instead of closing, restart the connection
+			hass.Close()
+			return
 		}
+	}
 
-		err = creds.Authorize()
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		config.Set("auth.refreshToken", creds.RefreshToken)
-		config.Set("auth.accessToken", creds.AccessToken())
-		config.Set("auth.clientId", creds.ClientId)
-		config.Save()
-
-		statusStringLabel.SetText("Connecting ...")
-		homeAssistant = hass.NewHass(server.String(), creds)
-		homeAssistant.Socket.OnDisconnect = func() {
-			a.Quit()
-		}
-		homeAssistant.Connect()
-		for !homeAssistant.Connected {
-			time.Sleep(time.Second * 1)
-			log.Print("waiting for connection...")
-			statusStringLabel.SetText("waiting for connection...")
-		}
-		statusStringLabel.SetText("Connected")
-		Events.Show()
-		go func() {
-			time.Sleep(time.Second * 1)
-			w.Hide()
-		}()
-		log.Print(homeAssistant.Version())
-		homeAssistant.SubscribeToEventType("state_changed", func(message []byte, conn *ws.Websocket) {
-			log.Printf("Received event: %s", string(message))
-			eventCount = eventCount + 1
-			EventCount.SetText(strconv.Itoa(eventCount))
-		})
-
-		device := homeAssistant.RegisterCompanion()
-		device.SetupPush(func(notification *hass.PushNotification) {
-			beeep.Notify(notification.Event.Title, notification.Event.Message, "")
-		})
-
-		// go homeAssistant.Ping()
-		// pp.Println(mobile_device)
-	}()
 }

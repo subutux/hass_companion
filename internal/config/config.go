@@ -8,7 +8,7 @@ import (
 
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
-	"github.com/subutux/hass_companion/internal/auth"
+	"github.com/subutux/hass_companion/hass/auth"
 )
 
 func Load() error {
@@ -44,10 +44,10 @@ func Get(conf string) string {
 	return viper.GetString(conf)
 }
 
-func GetStruct(conf string, v interface{}) interface{} {
+func GetStruct(conf string, v interface{}) (interface{}, error) {
 	data := viper.GetString(conf)
-	json.Unmarshal([]byte(data), &v)
-	return v
+	err := json.Unmarshal([]byte(data), &v)
+	return v, err
 }
 
 func Save() error {

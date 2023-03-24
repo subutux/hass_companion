@@ -196,7 +196,7 @@ func (h *Hass) wsLogin(message []byte, conn *ws.Websocket) {
 }
 
 func (h *Hass) wsLoginSuccessfull(message []byte, conn *ws.Websocket) {
-	log.Printf("Connected to %s!", h.Server)
+	log.Printf("Connected to %s!", &h.Credentials.Server)
 	h.Connected = true
 }
 
