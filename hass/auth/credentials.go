@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/k0kubun/pp/v3"
 )
 
 type Credentials struct {
@@ -44,11 +45,13 @@ func (c *Credentials) Authorize() error {
 	api := resty.New()
 	endpoint, _ := url.Parse(c.Server)
 	endpoint.Path = "/auth/token"
-	response, err := api.R().SetFormData(map[string]string{
+	formData := map[string]string{
 		"grant_type": "authorization_code",
 		"code":       c.Token,
 		"client_id":  c.ClientId,
-	}).SetResult(&AuthorizationResponse{}).
+	}
+	pp.Println(formData)
+	response, err := api.R().SetFormData(formData).SetResult(&AuthorizationResponse{}).
 		Post(endpoint.String())
 
 	if err != nil {

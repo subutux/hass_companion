@@ -32,17 +32,11 @@ func (msg *IncomingMessage) In(Type ...string) bool {
 }
 
 type IncomingResultMessage struct {
-	ID      int64  `json:"id"`
-	Type    string `json:"type"`
-	Success bool   `json:"success"`
-	Result  struct {
-		Context struct {
-			Id       string `json:"id"`
-			ParentId string `json:"parent_id"`
-			UserId   string `json:"user_id"`
-		} `json:"context"`
-	} `json:"result"`
-	Error struct {
+	ID      int64          `json:"id"`
+	Type    string         `json:"type"`
+	Success bool           `json:"success"`
+	Result  any `json:"result"`
+	Error   struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	}
@@ -60,11 +54,8 @@ type IncomingEventMessage struct {
 	ID    int64  `json:"id"`
 	Type  string `json:"type"`
 	Event struct {
-		Data struct {
-			EntityID string `json:"entity_id"`
-			NewState State  `json:"new_state"`
-			OldState State  `json:"old_state"`
-		} `json:"data"`
+		Data      map[string]any `json:"data"`
+		EventType string         `json:"event_type"`
 	} `json:"event"`
 }
 
@@ -112,11 +103,11 @@ type OutgoingCommand struct {
 }
 
 type State struct {
-	EntityID    string      `json:"entity_id"`
-	LastChanged time.Time   `json:"last_changed"`
-	State       string      `json:"state"`
-	Attributes  interface{} `json:"attributes"`
-	LastUpdated time.Time   `json:"last_updated"`
+	EntityID    string         `json:"entity_id"`
+	LastChanged time.Time      `json:"last_changed"`
+	State       string         `json:"state"`
+	Attributes  map[string]any `json:"attributes"`
+	LastUpdated time.Time      `json:"last_updated"`
 	Context     struct {
 		ID       string      `json:"id"`
 		ParentID interface{} `json:"parent_id"`

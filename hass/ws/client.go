@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"log"
+	"net/url"
 	"sync/atomic"
 	"time"
 
@@ -37,12 +38,37 @@ type Client struct {
 	resetTimerChan chan struct{}
 	closed         int32
 
+	callbacks map[int64]func(message *IncomingResultMessage)
+
 	ListenError ClientError
 }
 
-func NewClient(url string, credentials *auth.Credentials) (*Client, error) {
+// detectWebsocketUrl tries to determine the websocket url from the server url
+func detectWebsocketUrl(server string) (wsUrl url.URL, err error) {
+	serverUrl, err := url.Parse(server)
+	if err != nil {
+		return wsUrl, err
+	}
+	if serverUrl.Scheme == "http" {
+		wsUrl.Scheme = "ws"
+	} else {
+		wsUrl.Scheme = "wss"
+	}
+
+	wsUrl.Host = serverUrl.Host
+	wsUrl.Path = "/api/websocket"
+	pp.Print(server, wsUrl)
+	return wsUrl, nil
+
+}
+
+func NewClient(credentials *auth.Credentials) (*Client, error) {
+	url, err := detectWebsocketUrl(credentials.Server)
+	if err != nil {
+		return nil, err
+	}
 	dailer := websocket.DefaultDialer
-	conn, _, err := dailer.Dial(url, nil)
+	conn, _, err := dailer.Dial(url.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +95,8 @@ func NewClient(url string, credentials *auth.Credentials) (*Client, error) {
 		quitWriterChan:   make(chan struct{}),
 		resetTimerChan:   make(chan struct{}),
 
+		callbacks: make(map[int64]func(message *IncomingResultMessage)),
+
 		closed: 0,
 	}
 
@@ -90,102 +118,112 @@ func (c *Client) Listen() {
 	// First, we close some channels and then CAS to 1 and proceed to close the writer chan also.
 	// This is needed because then the defer clause does not double-close the writer when (2) happens.
 	// But if (1) happens, we set the closed bit, and close the rest of the stuff.
-	go func() {
-		defer func() {
-			close(c.EventChannel)
-			close(c.ResultChannel)
-			close(c.PushNotificationChannel)
-			close(c.quitPingWatchdog)
-			close(c.PongTimeoutChannel)
-			close(c.resetTimerChan)
-			if !c.Ready {
-				close(c.Started)
-			}
-			c.Close()
-		}()
+	defer func() {
+		close(c.EventChannel)
+		close(c.ResultChannel)
+		close(c.PushNotificationChannel)
+		close(c.quitPingWatchdog)
+		close(c.PongTimeoutChannel)
+		close(c.resetTimerChan)
+		if !c.Ready {
+			close(c.Started)
+		}
+		c.Close()
+	}()
 
-		var buf bytes.Buffer
-		buf.Grow(avgReadMsgSizeBytes)
+	var buf bytes.Buffer
+	buf.Grow(avgReadMsgSizeBytes)
 
-		for {
-			// Reset buffer.
-			buf.Reset()
-			_, r, err := c.Conn.NextReader()
-			if err != nil {
-				if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
-					c.ListenError = NewClientError("Client.Listen", err)
-				}
-				return
-			}
-			// Use pre-allocated buffer.
-			_, err = buf.ReadFrom(r)
-			if err != nil {
+	for {
+		// Reset buffer.
+		buf.Reset()
+		_, r, err := c.Conn.NextReader()
+		if err != nil {
+			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
 				c.ListenError = NewClientError("Client.Listen", err)
-				return
 			}
+			return
+		}
+		// Use pre-allocated buffer.
+		_, err = buf.ReadFrom(r)
+		if err != nil {
+			c.ListenError = NewClientError("Client.Listen", err)
+			return
+		}
 
-			msg, jsonErr := IncomingMessageFromJSON(bytes.NewReader(buf.Bytes()))
+		msg, jsonErr := IncomingMessageFromJSON(bytes.NewReader(buf.Bytes()))
+		if jsonErr != nil {
+			log.Printf("Failed to decode from json: %s", jsonErr)
+			continue
+		}
+
+		pp.Println(msg)
+
+		if msg.Is("event") {
+
+			// First, try to decode it as an push notification
+			notification, jsonErr := IncomingPushNotificationMessageFromJSON(bytes.NewReader(buf.Bytes()))
 			if jsonErr != nil {
-				log.Printf("Failed to decode from json: %s", jsonErr)
+				log.Printf("Failed to decode event from json: %s", jsonErr)
+			} else if notification.Event.Message != "" {
+				log.Printf("received push notification %v", buf.String())
+
+				c.PushNotificationChannel <- notification
 				continue
 			}
-
-			pp.Println(msg)
-
-			if msg.Is("event") {
-
-				// First, try to decode it as an push notification
-				notification, jsonErr := IncomingPushNotificationMessageFromJSON(bytes.NewReader(buf.Bytes()))
-				if jsonErr != nil {
-					log.Printf("Failed to decode event from json: %s", jsonErr)
-				} else if notification.Event.Message != "" {
-					log.Printf("received push notification")
-					c.PushNotificationChannel <- notification
-				}
-				// then continue to event processing
-				event, jsonErr := IncomingEventMessageFromJSON(bytes.NewReader(buf.Bytes()))
-				if jsonErr != nil {
-					log.Printf("Failed to decode event from json: %s", jsonErr)
-				} else {
-					log.Printf("received event for entity %v", event.Event.Data.EntityID)
-					c.EventChannel <- event
-				}
-				continue
-			}
-
-			if msg.Is("result") {
-				result, jsonErr := IncomingResultMessageFromJSON(bytes.NewReader(buf.Bytes()))
-				if jsonErr != nil {
-					log.Printf("Failed to decode result from json: %s", jsonErr)
-				} else {
-					pp.Println(result)
-					log.Printf("received result with error %v and success %v", result.Error, result.Success)
-					c.ResultChannel <- result
-				}
-				continue
-			}
-
-			if msg.In("auth_required", "auth_ok", "auth_invalid") {
-				result, jsonErr := IncomingMessageFromJSON(bytes.NewReader(buf.Bytes()))
-				if jsonErr != nil {
-					log.Printf("Failed to decode result from json: %s", jsonErr)
-				} else {
-					c.authenticate(result)
-				}
-				continue
-			}
-
-			if msg.Is("pong") {
-				result, jsonErr := IncomingPongMessageFromJSON(bytes.NewReader(buf.Bytes()))
-				if jsonErr != nil {
-					log.Printf("Failed to decode result from json: %s", jsonErr)
-				} else {
-					c.PongChannel <- result
-				}
+			// then continue to event processing
+			event, jsonErr := IncomingEventMessageFromJSON(bytes.NewReader(buf.Bytes()))
+			if jsonErr != nil {
+				log.Printf("Failed to decode event from json: %s", jsonErr)
+			} else {
+				log.Printf("received %s event", event.Event.EventType)
+				c.EventChannel <- event
 				continue
 			}
 		}
-	}()
+
+		if msg.Is("result") {
+			result, jsonErr := IncomingResultMessageFromJSON(bytes.NewReader(buf.Bytes()))
+			if jsonErr != nil {
+				log.Printf("Failed to decode result from json: %s", jsonErr)
+			} else {
+				pp.Println(result)
+				log.Printf("received result with error %v and success %v", result.Error, result.Success)
+
+				// first check if we have a callback set for this id
+				cb, ok := c.callbacks[msg.ID]
+				if ok {
+					log.Printf("Calling callback for id %v", msg.ID)
+					cb(result)
+					// Delete the callback afterwards
+					delete(c.callbacks, msg.ID)
+					continue
+				}
+				c.ResultChannel <- result
+			}
+			continue
+		}
+
+		if msg.In("auth_required", "auth_ok", "auth_invalid") {
+			result, jsonErr := IncomingMessageFromJSON(bytes.NewReader(buf.Bytes()))
+			if jsonErr != nil {
+				log.Printf("Failed to decode result from json: %s", jsonErr)
+			} else {
+				c.authenticate(result)
+			}
+			continue
+		}
+
+		if msg.Is("pong") {
+			result, jsonErr := IncomingPongMessageFromJSON(bytes.NewReader(buf.Bytes()))
+			if jsonErr != nil {
+				log.Printf("Failed to decode result from json: %s", jsonErr)
+			} else {
+				c.PongChannel <- result
+			}
+			continue
+		}
+	}
 }
 
 // MonitorConnection periodically sends pings over the websocket connection
@@ -280,6 +318,10 @@ func (c *Client) writer() {
 	}
 }
 
+// func (c *Client) SubscribeToEventType(eventType string, ch chan *IncomingEventMessage){
+
+// }
+
 // SendCommand sends a command over the websocket connection to Home Assisstant
 func (c *Client) SendCommand(command Cmd) error {
 	if !c.Authenticated {
@@ -288,6 +330,22 @@ func (c *Client) SendCommand(command Cmd) error {
 	command.SetID(c.Sequence)
 
 	c.Sequence++
+	pp.Println(command)
+	c.writeChan <- command
+	return nil
+}
+// SendCommandWithCallback Sends a command over the websocket. The callback will be executed when we receive
+// a result message with the same Sequence ID. The Callback is executed **once** and will be removed after
+// the callback is called.
+func (c *Client) SendCommandWithCallback(command Cmd, callback func(message *IncomingResultMessage)) error {
+	if !c.Authenticated {
+		return errors.New("Not authenticated")
+	}
+	c.callbacks[c.Sequence] = callback
+	command.SetID(c.Sequence)
+
+	c.Sequence++
+
 	pp.Println(command)
 	c.writeChan <- command
 	return nil

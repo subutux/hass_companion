@@ -132,6 +132,21 @@ func NewPingCmd() *PingCmd {
 	}
 }
 
+type GetStatesCmd struct {
+	ID   int64  `json:"id"`
+	Type string `json:"type"`
+}
+
+func (c *GetStatesCmd) SetID(ID int64) {
+	c.ID = ID
+}
+
+func NewGetStatesCmd() *GetStatesCmd {
+	return &GetStatesCmd{
+		Type: "get_states",
+	}
+}
+
 // TODO:
 // get_config
 // get_services
