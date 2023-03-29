@@ -3,7 +3,8 @@ package ws
 import (
 	"bytes"
 	"errors"
-	"log"
+    "fmt"
+    "log"
 	"net/url"
 	"sync/atomic"
 	"time"
@@ -14,7 +15,7 @@ import (
 )
 
 const avgReadMsgSizeBytes = 1024
-
+var NotAuthenticatedError error = errors.New("not authenticated")
 type Client struct {
 	*auth.Credentials
 	Authenticated bool
@@ -49,9 +50,8 @@ func detectWebsocketUrl(server string) (wsUrl url.URL, err error) {
 	if err != nil {
 		return wsUrl, err
 	}
-	if serverUrl.Scheme == "http" {
-		wsUrl.Scheme = "ws"
-	} else {
+	wsUrl.Scheme = "ws"
+	if serverUrl.Scheme == "https" {
 		wsUrl.Scheme = "wss"
 	}
 
@@ -63,23 +63,13 @@ func detectWebsocketUrl(server string) (wsUrl url.URL, err error) {
 }
 
 func NewClient(credentials *auth.Credentials) (*Client, error) {
-	url, err := detectWebsocketUrl(credentials.Server)
+	server, err := detectWebsocketUrl(credentials.Server)
 	if err != nil {
 		return nil, err
 	}
 	dailer := websocket.DefaultDialer
 	dailer.HandshakeTimeout = 5 * time.Second
-	conn, _, err := dailer.Dial(url.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-
-	err = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if err != nil {
-		return nil, err
-	}
-
-	err = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	conn, _, err := dailer.Dial(server.String(), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -149,7 +139,6 @@ func (c *Client) Listen() {
 		// Reset buffer.
 		buf.Reset()
 		_, r, err := c.Conn.NextReader()
-		log.Println("Reached read")
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
 				c.ListenError = NewClientError("Client.Listen", err)
@@ -248,7 +237,12 @@ func (c *Client) MonitorConnection() {
 			return
 		case t := <-c.PingIntervalTimer.C:
 			log.Printf("Ping at %v", t)
-			c.SendCommand(NewPingCmd())
+			err := c.SendCommand(NewPingCmd())
+			if err != nil {
+				log.Printf("Failed to send ping command: %v", err)
+				c.PingIntervalTimer.Stop()
+				return
+			}
 			// Make sure we receive a pong in time
 			pongTimeoutTimer := time.NewTicker(1 * time.Second)
 			go func() {
@@ -294,7 +288,7 @@ func (c *Client) authenticate(msg *IncomingMessage) {
 	case "auth_invalid":
 		log.Print("authentication failed")
 		c.Authenticated = false
-		c.ListenError = NewClientError("Client.authenticate", errors.New("Authentication invalid"))
+		c.ListenError = NewClientError("Client.authenticate", NotAuthenticatedError)
 		c.Close()
 	default:
 		/* code */
@@ -311,7 +305,7 @@ func (c *Client) Close() {
 
 	c.quitWriterChan <- struct{}{}
 	close(c.writeChan)
-	c.Conn.Close()
+	_ = c.Conn.Close()
 }
 
 // TODO: un-export the Conn so that Write methods go through the writer
@@ -319,7 +313,10 @@ func (c *Client) writer() {
 	for {
 		select {
 		case msg := <-c.writeChan:
-			c.Conn.WriteJSON(msg)
+			err := c.Conn.WriteJSON(msg)
+			if err != nil {
+				log.Printf("failed to write to writeChan: %v", err)
+			}
 
 		case <-c.quitWriterChan:
 			return
@@ -334,12 +331,11 @@ func (c *Client) writer() {
 // SendCommand sends a command over the websocket connection to Home Assisstant
 func (c *Client) SendCommand(command Cmd) error {
 	if !c.Authenticated {
-		return errors.New("Not authenticated")
+		return NotAuthenticatedError
 	}
 	command.SetID(c.Sequence)
 
 	c.Sequence++
-	pp.Println(command)
 	c.writeChan <- command
 	return nil
 }
@@ -348,14 +344,11 @@ func (c *Client) SendCommand(command Cmd) error {
 // the callback is called.
 func (c *Client) SendCommandWithCallback(command Cmd, callback func(message *IncomingResultMessage)) error {
 	if !c.Authenticated {
-		return errors.New("Not authenticated")
+		return NotAuthenticatedError
 	}
 	c.callbacks[c.Sequence] = callback
 	command.SetID(c.Sequence)
-
 	c.Sequence++
-
-	pp.Println(command)
 	c.writeChan <- command
 	return nil
 }
