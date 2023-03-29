@@ -99,7 +99,7 @@ func (c *Credentials) refresh() error {
 	log.Print("refreshing token")
 	endpoint, _ := url.Parse(c.Server)
 	endpoint.Path = "/auth/token"
-	api := resty.New()
+	api := resty.New().SetTimeout(5 * time.Second)
 	response, err := api.R().SetFormData(map[string]string{
 		"grant_type":    "refresh_token",
 		"refresh_token": c.RefreshToken,

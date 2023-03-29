@@ -68,7 +68,18 @@ func NewClient(credentials *auth.Credentials) (*Client, error) {
 		return nil, err
 	}
 	dailer := websocket.DefaultDialer
+	dailer.HandshakeTimeout = 5 * time.Second
 	conn, _, err := dailer.Dial(url.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	err = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if err != nil {
+		return nil, err
+	}
+
+	err = conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
 	if err != nil {
 		return nil, err
 	}
@@ -138,6 +149,7 @@ func (c *Client) Listen() {
 		// Reset buffer.
 		buf.Reset()
 		_, r, err := c.Conn.NextReader()
+		log.Println("Reached read")
 		if err != nil {
 			if !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseNoStatusReceived) {
 				c.ListenError = NewClientError("Client.Listen", err)
@@ -156,8 +168,6 @@ func (c *Client) Listen() {
 			log.Printf("Failed to decode from json: %s", jsonErr)
 			continue
 		}
-
-		pp.Println(msg)
 
 		if msg.Is("event") {
 
@@ -187,7 +197,6 @@ func (c *Client) Listen() {
 			if jsonErr != nil {
 				log.Printf("Failed to decode result from json: %s", jsonErr)
 			} else {
-				pp.Println(result)
 				log.Printf("received result with error %v and success %v", result.Error, result.Success)
 
 				// first check if we have a callback set for this id
