@@ -71,6 +71,7 @@ type IncomingPushNotificationMessage struct {
 	ID    int64  `json:"id"`
 	Type  string `json:"type"`
 	Event struct {
+		Title       string `json:"title"`
 		Message       string `json:"message"`
 		HassConfirmId string `json:"hass_confirm_id"`
 	} `json:"event"`
