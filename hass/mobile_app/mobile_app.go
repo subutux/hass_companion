@@ -2,7 +2,7 @@ package mobile_app
 
 import (
 	"fmt"
-	"log"
+    "log"
 	"net/url"
 
 	"github.com/go-resty/resty/v2"
@@ -58,15 +58,18 @@ func NewMobileAppRegistration() *MobileAppRegistration {
 	if err != nil {
 		log.Fatalf("Unable to determine system: %s", err)
 	}
-
+	info, err := GetServerInformation()
+	if err != nil {
+		log.Fatalf("Unable to determine system: %s", err)
+	}
 	return &MobileAppRegistration{
 		DeviceID:           OSInfo.HostID,
 		AppID:              "be.subutux.companion",
 		AppName:            "HASS Companion",
 		AppVersion:         "0.0.1",
 		DeviceName:         OSInfo.Hostname,
-		Manufacturer:       "unknown",
-		Model:              "unknown",
+		Manufacturer:       info.Vendor,
+		Model:              info.Name + " " + info.Version,
 		OsName:             OSInfo.Platform,
 		OsVersion:          OSInfo.PlatformVersion,
 		SupportsEncryption: false,
