@@ -3,8 +3,7 @@ package ws
 import (
 	"bytes"
 	"errors"
-    "fmt"
-    "log"
+	"log"
 	"net/url"
 	"sync/atomic"
 	"time"
@@ -15,7 +14,9 @@ import (
 )
 
 const avgReadMsgSizeBytes = 1024
+
 var NotAuthenticatedError error = errors.New("not authenticated")
+
 type Client struct {
 	*auth.Credentials
 	Authenticated bool
@@ -339,6 +340,7 @@ func (c *Client) SendCommand(command Cmd) error {
 	c.writeChan <- command
 	return nil
 }
+
 // SendCommandWithCallback Sends a command over the websocket. The callback will be executed when we receive
 // a result message with the same Sequence ID. The Callback is executed **once** and will be removed after
 // the callback is called.
@@ -349,6 +351,7 @@ func (c *Client) SendCommandWithCallback(command Cmd, callback func(message *Inc
 	c.callbacks[c.Sequence] = callback
 	command.SetID(c.Sequence)
 	c.Sequence++
+	pp.Print(command)
 	c.writeChan <- command
 	return nil
 }

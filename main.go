@@ -2,23 +2,26 @@ package main
 
 import (
 	"encoding/json"
-    "fyne.io/fyne/v2"
-    "fyne.io/fyne/v2/app"
-    "fyne.io/fyne/v2/container"
-    "fyne.io/fyne/v2/dialog"
-    "fyne.io/fyne/v2/driver/desktop"
-    "fyne.io/fyne/v2/layout"
-    "fyne.io/fyne/v2/widget"
-    "github.com/gen2brain/beeep"
-    "log"
+	"log"
 	"os"
 	"os/signal"
-    "strconv"
-    "syscall"
+	"strconv"
+	"syscall"
+
+	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/widget"
+	"github.com/gen2brain/beeep"
+	"github.com/godbus/dbus/v5"
 
 	"github.com/k0kubun/pp/v3"
 	"github.com/subutux/hass_companion/hass/auth"
 	"github.com/subutux/hass_companion/hass/mobile_app"
+	"github.com/subutux/hass_companion/hass/mobile_app/sensors"
 	"github.com/subutux/hass_companion/hass/rest"
 	"github.com/subutux/hass_companion/hass/states"
 	"github.com/subutux/hass_companion/hass/ws"
@@ -27,6 +30,7 @@ import (
 
 var hass *ws.Client
 var eventCount int
+
 func main() {
 
 	a := app.New()
@@ -42,7 +46,7 @@ func main() {
 	EventTitle := widget.NewLabel("Events received")
 	EventTitle.TextStyle = fyne.TextStyle{
 		Bold: true,
-		}
+	}
 	EventCount := widget.NewLabel("0")
 	Events := container.New(layout.NewHBoxLayout(), EventTitle, EventCount)
 	Events.Hide()
@@ -62,11 +66,11 @@ func main() {
 		w.Resize(fyne.Size{
 			Width:  600,
 			Height: 400,
-			})
+		})
 		d.Resize(fyne.Size{
 			Width:  500,
 			Height: 300,
-			})
+		})
 		d.Show()
 		w.RequestFocus()
 	} else {
@@ -131,6 +135,7 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 			}
 
 		})
+
 		statusStringLabel.SetText("Connected: Subscribing to state changes ...")
 		hass.SendCommand(ws.NewSubscribeToEvents("state_changed"))
 
@@ -139,16 +144,40 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 		statusStringLabel.SetText("Connected: Registering as a mobile app...")
 		registration, err := rhass.RegisterMobileApp(reg)
 		config.Set("registration", *registration)
-		mobile := mobile_app.NewMobileApp(registration, hass)
-
+		mobile := mobile_app.NewMobileApp(registration, &creds, hass)
+		hass.SendCommandWithCallback(ws.NewGetWebhookCmd(registration.WebhookID, mobile_app.NewWebhookGetConfigCmd()), func(message *ws.IncomingResultMessage) {
+			pp.Println(message)
+		})
 		statusStringLabel.SetText("Connected: Enabling push notifications ...")
 		mobile.EnableWebsocketPushNotifications()
 		go mobile.WatchForPushNotifications(func(notification *ws.IncomingPushNotificationMessage) {
 			//TODO switch to https://github.com/esiqveland/notify to support actions
-			beeep.Notify("Home Assistant: " + notification.Event.Title, notification.Event.Message, "icon.png")
+			beeep.Notify("Home Assistant: "+notification.Event.Title, notification.Event.Message, "icon.png")
 		})
 
 		statusStringLabel.SetText("Connected.")
+
+		conn, err := dbus.SystemBus()
+		if err == nil {
+			batteries, err := sensors.DiscoverBatteries(conn)
+			if err == nil {
+				for _, battery := range batteries {
+					mobile.SensorCollector.AddSensor(battery)
+				}
+			}
+		}
+
+		memory, err := sensors.DiscoverMemory()
+		if err == nil {
+			mobile.SensorCollector.AddSensor(memory)
+		}
+		load, err := sensors.DiscoverAverageLoad()
+		if err == nil {
+			mobile.SensorCollector.AddSensor(load)
+		}
+
+		go mobile.SensorCollector.Collect()
+
 		Events.Show()
 
 		for {
@@ -163,19 +192,19 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 				} else {
 					log.Printf("Error converting event to ChangeEvent: %v", err)
 				}
-				case <-closeChannel:
+			case <-closeChannel:
 
-					statusStringLabel.SetText("disconnecting...")
-					hass.Close()
-					a.Quit()
-					return
-				case <-hass.PongTimeoutChannel:
-					// TODO instead of closing, restart the connection
+				statusStringLabel.SetText("disconnecting...")
+				hass.Close()
+				a.Quit()
+				return
+			case <-hass.PongTimeoutChannel:
+				// TODO instead of closing, restart the connection
 
-					statusStringLabel.SetText("Failed to receive a pong in time. Disconnecting ...")
-					hass.Close()
-					a.Quit()
-					return
+				statusStringLabel.SetText("Failed to receive a pong in time. Disconnecting ...")
+				hass.Close()
+				a.Quit()
+				return
 			}
 		}
 	}()

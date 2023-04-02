@@ -147,6 +147,48 @@ func NewGetStatesCmd() *GetStatesCmd {
 	}
 }
 
+type GetConfigCmd struct {
+	ID   int64  `json:"id"`
+	Type string `json:"type"`
+}
+
+func (c *GetConfigCmd) SetID(ID int64) {
+	c.ID = ID
+}
+
+func NewGetConfigCmd() *GetConfigCmd {
+	return &GetConfigCmd{
+		Type: "get_config",
+	}
+}
+
+type GetWebhookCmd struct {
+	ID        int64             `json:"id"`
+	Type      string            `json:"type"`
+	WebhookID string            `json:"webhook_id"`
+	Method    string            `json:"method"`
+	Body      string            `json:"body"`
+	Headers   map[string]string `json:"headers"`
+	Query     string            `json:"query"`
+}
+
+func (c *GetWebhookCmd) SetID(ID int64) {
+	c.ID = ID
+}
+
+func NewGetWebhookCmd(webhookid string, body string) *GetWebhookCmd {
+	return &GetWebhookCmd{
+		Type:      "webhook/handle",
+		WebhookID: webhookid,
+		Body:      body,
+		Method:    "GET",
+		Headers: map[string]string{
+			"Content-Type": "application/json",
+		},
+		Query: "",
+	}
+}
+
 // TODO:
 // get_config
 // get_services
