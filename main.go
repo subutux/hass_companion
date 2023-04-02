@@ -2,11 +2,13 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
@@ -28,8 +30,13 @@ import (
 	"github.com/subutux/hass_companion/internal/config"
 )
 
-var hass *ws.Client
-var eventCount int
+var (
+	hass                  *ws.Client
+	eventCount            int
+	retries               = 0
+	retryIntervalDuration = 5 * time.Second
+	errorPingTimeout      = errors.New("PingTimeout")
+)
 
 func main() {
 
@@ -106,78 +113,22 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 		config.Set("auth.clientId", creds.ClientId)
 		config.Save()
 
-		reg := mobile_app.NewMobileAppRegistration()
 		statusStringLabel.SetText("Connecting ...")
-		hass, err = ws.NewClient(&creds)
-		if err != nil {
-			log.Printf("Error creating client: %s", err)
-			os.Exit(1)
-		}
+		Connect(creds)
 
-		StateStore := states.Store{}
-
-		go hass.Listen()
 		go hass.MonitorConnection()
-		<-hass.Started
-		statusStringLabel.SetText("Connected: Setting up States tracking...")
-		hass.SendCommandWithCallback(ws.NewGetStatesCmd(), func(message *ws.IncomingResultMessage) {
-			if !message.Success {
-				log.Printf("home assistant responded with %s: %s", message.Error.Code, message.Error.Message)
-				return
-			}
-			data, err := json.Marshal(message.Result)
-			if err != nil {
-				return
-			}
-			err = json.Unmarshal(data, &StateStore.States)
-			if err != nil {
-				log.Printf("failed to decode json result to States: %v", err)
-			}
 
-		})
+		// Setup State Tracking
+		statusStringLabel.SetText("Connected: Setting up States tracking...")
+		StateStore := SetupStateTracking()
 
 		statusStringLabel.SetText("Connected: Subscribing to state changes ...")
 		hass.SendCommand(ws.NewSubscribeToEvents("state_changed"))
 
-		rhass := rest.NewClient(&creds)
-
+		// SetupMobile
 		statusStringLabel.SetText("Connected: Registering as a mobile app...")
-		registration, err := rhass.RegisterMobileApp(reg)
-		config.Set("registration", *registration)
-		mobile := mobile_app.NewMobileApp(registration, &creds, hass)
-		hass.SendCommandWithCallback(ws.NewGetWebhookCmd(registration.WebhookID, mobile_app.NewWebhookGetConfigCmd()), func(message *ws.IncomingResultMessage) {
-			pp.Println(message)
-		})
-		statusStringLabel.SetText("Connected: Enabling push notifications ...")
-		mobile.EnableWebsocketPushNotifications()
-		go mobile.WatchForPushNotifications(func(notification *ws.IncomingPushNotificationMessage) {
-			//TODO switch to https://github.com/esiqveland/notify to support actions
-			beeep.Notify("Home Assistant: "+notification.Event.Title, notification.Event.Message, "icon.png")
-		})
-
+		SetupMobile(creds)
 		statusStringLabel.SetText("Connected.")
-
-		conn, err := dbus.SystemBus()
-		if err == nil {
-			batteries, err := sensors.DiscoverBatteries(conn)
-			if err == nil {
-				for _, battery := range batteries {
-					mobile.SensorCollector.AddSensor(battery)
-				}
-			}
-		}
-
-		memory, err := sensors.DiscoverMemory()
-		if err == nil {
-			mobile.SensorCollector.AddSensor(memory)
-		}
-		load, err := sensors.DiscoverAverageLoad()
-		if err == nil {
-			mobile.SensorCollector.AddSensor(load)
-		}
-
-		go mobile.SensorCollector.Collect()
-
 		Events.Show()
 
 		for {
@@ -208,4 +159,78 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 			}
 		}
 	}()
+}
+
+func Connect(creds auth.Credentials) {
+	hass, err := ws.NewClient(&creds)
+	if err != nil {
+		log.Printf("Error creating client: %s", err)
+		os.Exit(1)
+	}
+
+	go hass.Listen()
+	<-hass.Started
+
+	return
+}
+
+func SetupMobile(creds auth.Credentials) {
+	rhass := rest.NewClient(&creds)
+
+	// TODO Load registration from config if exists
+	reg := mobile_app.NewMobileAppRegistration()
+	registration, err := rhass.RegisterMobileApp(reg)
+	config.Set("registration", *registration)
+
+	mobile := mobile_app.NewMobileApp(registration, &creds, hass)
+	hass.SendCommandWithCallback(ws.NewGetWebhookCmd(registration.WebhookID, mobile_app.NewWebhookGetConfigCmd()), func(message *ws.IncomingResultMessage) {
+		pp.Println(message)
+	})
+	mobile.EnableWebsocketPushNotifications()
+	go mobile.WatchForPushNotifications(func(notification *ws.IncomingPushNotificationMessage) {
+		//TODO switch to https://github.com/esiqveland/notify to support actions
+
+		beeep.Notify("Home Assistant: "+notification.Event.Title, notification.Event.Message, "icon.png")
+	})
+
+	conn, err := dbus.SystemBus()
+	if err == nil {
+		batteries, err := sensors.DiscoverBatteries(conn)
+		if err == nil {
+			for _, battery := range batteries {
+				mobile.SensorCollector.AddSensor(battery)
+			}
+		}
+	}
+
+	memory, err := sensors.DiscoverMemory()
+	if err == nil {
+		mobile.SensorCollector.AddSensor(memory)
+	}
+	load, err := sensors.DiscoverAverageLoad()
+	if err == nil {
+		mobile.SensorCollector.AddSensor(load)
+	}
+
+	go mobile.SensorCollector.Collect()
+}
+
+func SetupStateTracking() *states.Store {
+	StateStore := states.Store{}
+	hass.SendCommandWithCallback(ws.NewGetStatesCmd(), func(message *ws.IncomingResultMessage) {
+		if !message.Success {
+			log.Printf("home assistant responded with %s: %s", message.Error.Code, message.Error.Message)
+			return
+		}
+		data, err := json.Marshal(message.Result)
+		if err != nil {
+			return
+		}
+		err = json.Unmarshal(data, &StateStore.States)
+		if err != nil {
+			log.Printf("failed to decode json result to States: %v", err)
+		}
+
+	})
+	return &StateStore
 }
