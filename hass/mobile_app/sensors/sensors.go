@@ -79,16 +79,16 @@ type Collector struct {
 	RegisteredSensors []string
 	// List containing the Unique IDs of Disabled sensors
 	DisabledSensors []string
-	Interval        *time.Ticker
+	ticker          *time.Ticker
+	Interval        time.Duration
 	Webhook         string
 }
 
 func NewCollector(webhook string, interval time.Duration) *Collector {
 	return &Collector{
 		mu:       sync.Mutex{},
-		StopChan: make(chan struct{}),
-		Interval: time.NewTicker(interval),
 		Webhook:  webhook,
+		Interval: interval,
 	}
 }
 
@@ -134,33 +134,50 @@ func (c *Collector) AddSensor(sensor SensorInterface) {
 }
 
 func (c *Collector) Collect() {
+
+	c.StopChan = make(chan struct{})
+
+	c.ticker = time.NewTicker(c.Interval)
+
 	for {
 		select {
 		case <-c.StopChan:
-			c.Interval.Stop()
+			log.Println("Stopping collector")
+			c.ticker.Stop()
+			log.Println("Stopped collector")
 			return
-		case <-c.Interval.C:
-			log.Printf("Collecting sensors...")
-			var toUpdate []*SensorUpdate
-			for _, _sensors := range c.Sensors {
-				s := _sensors.GetSensors()
-				for _, sensor := range s {
-					log.Printf("Collecting sensor: %v", sensor.UniqueID)
-					if !c.IsRegistered(sensor) {
-						res, err := c.RegisterSensor(sensor)
-						pp.Println(string(res), err)
-						c.RegisteredSensors = append(c.RegisteredSensors, sensor.UniqueID)
-					}
-					if !c.IsDisabled(sensor) {
-						toUpdate = append(toUpdate, NewSensorUpdateFromSensor(sensor))
-					}
-				}
-			}
-			pp.Println(toUpdate)
-			res, err := c.UpdateSensors(toUpdate)
-			pp.Println(string(res), err)
+		case <-c.ticker.C:
+			c.collect()
 		}
 	}
+}
+
+func (c *Collector) collect() {
+	log.Printf("Collecting sensors...")
+	var toUpdate []*SensorUpdate
+	for _, _sensors := range c.Sensors {
+		s := _sensors.GetSensors()
+		for _, sensor := range s {
+			log.Printf("Collecting sensor: %v", sensor.UniqueID)
+			if !c.IsRegistered(sensor) {
+				res, err := c.RegisterSensor(sensor)
+				pp.Println(string(res), err)
+				c.RegisteredSensors = append(c.RegisteredSensors, sensor.UniqueID)
+			}
+			if !c.IsDisabled(sensor) {
+				toUpdate = append(toUpdate, NewSensorUpdateFromSensor(sensor))
+			}
+		}
+	}
+	res, err := c.UpdateSensors(toUpdate)
+	if err != nil {
+		pp.Println(string(res), err)
+	}
+}
+
+func (c *Collector) Stop() {
+	close(c.StopChan)
+
 }
 
 func (c *Collector) RegisterSensor(sensor *Sensor) ([]byte, error) {

@@ -31,7 +31,6 @@ type Client struct {
 
 	writeChan chan interface{}
 
-	PingIntervalTimer  *time.Ticker
 	PongChannel        chan *IncomingPongMessage
 	PongTimeoutChannel chan bool
 	quitPingWatchdog   chan struct{}
@@ -39,6 +38,8 @@ type Client struct {
 	quitWriterChan chan struct{}
 	resetTimerChan chan struct{}
 	closed         int32
+
+	writerRunning bool
 
 	callbacks map[int64]func(message *IncomingResultMessage)
 
@@ -74,7 +75,6 @@ func NewClient(credentials *auth.Credentials) (*Client, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	client := &Client{
 		Credentials:   credentials,
 		Authenticated: false,
@@ -90,7 +90,6 @@ func NewClient(credentials *auth.Credentials) (*Client, error) {
 		writeChan:               make(chan interface{}),
 
 		PongChannel:        make(chan *IncomingPongMessage),
-		PingIntervalTimer:  time.NewTicker(5 * time.Second),
 		PongTimeoutChannel: make(chan bool, 1),
 
 		quitPingWatchdog: make(chan struct{}),
@@ -108,30 +107,6 @@ func NewClient(credentials *auth.Credentials) (*Client, error) {
 
 // Listen starts the read loop of the websocket client.
 func (c *Client) Listen() {
-	// This loop can exit in 2 conditions:
-	// 1. Either the connection breaks naturally.
-	// 2. Close was explicitly called, which closes the connection manually.
-	//
-	// Due to the way the API is written, there is a requirement that a client may NOT
-	// call Listen at all and can still call Close and Connect.
-	// Therefore, we let the cleanup of the reader stuff rely on closing the connection
-	// and then we do the cleanup in the defer block.
-	//
-	// First, we close some channels and then CAS to 1 and proceed to close the writer chan also.
-	// This is needed because then the defer clause does not double-close the writer when (2) happens.
-	// But if (1) happens, we set the closed bit, and close the rest of the stuff.
-	defer func() {
-		close(c.EventChannel)
-		close(c.ResultChannel)
-		close(c.PushNotificationChannel)
-		close(c.quitPingWatchdog)
-		close(c.PongTimeoutChannel)
-		close(c.resetTimerChan)
-		if !c.Ready {
-			close(c.Started)
-		}
-		c.Close()
-	}()
 
 	var buf bytes.Buffer
 	buf.Grow(avgReadMsgSizeBytes)
@@ -152,17 +127,17 @@ func (c *Client) Listen() {
 			c.ListenError = NewClientError("Client.Listen", err)
 			return
 		}
-
-		msg, jsonErr := IncomingMessageFromJSON(bytes.NewReader(buf.Bytes()))
+		raw_message := buf.Bytes()
+		msg, jsonErr := IncomingMessageFromJSON(raw_message)
 		if jsonErr != nil {
 			log.Printf("Failed to decode from json: %s", jsonErr)
 			continue
 		}
 
-		if msg.Is("event") {
+		if msg.Is(MessageTypeEvent) {
 
 			// First, try to decode it as an push notification
-			notification, jsonErr := IncomingPushNotificationMessageFromJSON(bytes.NewReader(buf.Bytes()))
+			notification, jsonErr := IncomingPushNotificationMessageFromJSON(raw_message)
 			if jsonErr != nil {
 				log.Printf("Failed to decode event from json: %s", jsonErr)
 			} else if notification.Event.Message != "" {
@@ -172,7 +147,7 @@ func (c *Client) Listen() {
 				continue
 			}
 			// then continue to event processing
-			event, jsonErr := IncomingEventMessageFromJSON(bytes.NewReader(buf.Bytes()))
+			event, jsonErr := IncomingEventMessageFromJSON(raw_message)
 			if jsonErr != nil {
 				log.Printf("Failed to decode event from json: %s", jsonErr)
 			} else {
@@ -182,8 +157,8 @@ func (c *Client) Listen() {
 			}
 		}
 
-		if msg.Is("result") {
-			result, jsonErr := IncomingResultMessageFromJSON(bytes.NewReader(buf.Bytes()))
+		if msg.Is(MessageTypeResult) {
+			result, jsonErr := IncomingResultMessageFromJSON(raw_message)
 			if jsonErr != nil {
 				log.Printf("Failed to decode result from json: %s", jsonErr)
 			} else {
@@ -203,8 +178,8 @@ func (c *Client) Listen() {
 			continue
 		}
 
-		if msg.In("auth_required", "auth_ok", "auth_invalid") {
-			result, jsonErr := IncomingMessageFromJSON(bytes.NewReader(buf.Bytes()))
+		if msg.In(MessageTypeAuthRequired, MessageTypeAuthOK, MessageTypeAuthInvalid) {
+			result, jsonErr := IncomingMessageFromJSON(raw_message)
 			if jsonErr != nil {
 				log.Printf("Failed to decode result from json: %s", jsonErr)
 			} else {
@@ -213,8 +188,8 @@ func (c *Client) Listen() {
 			continue
 		}
 
-		if msg.Is("pong") {
-			result, jsonErr := IncomingPongMessageFromJSON(bytes.NewReader(buf.Bytes()))
+		if msg.Is(MessageTypePong) {
+			result, jsonErr := IncomingPongMessageFromJSON(raw_message)
 			if jsonErr != nil {
 				log.Printf("Failed to decode result from json: %s", jsonErr)
 			} else {
@@ -225,23 +200,53 @@ func (c *Client) Listen() {
 	}
 }
 
+// Redail tries to reconnect the websocket without closing all channels
+// keeping the application running. This is needed for when the connection
+// to Home Assistant is lost and we want to try to reconnect.
+func (c *Client) Redial() error {
+	log.Println("Redialing")
+	if c.writerRunning {
+
+		c.quitWriterChan <- struct{}{}
+	}
+	c.Conn.Close()
+	server, err := detectWebsocketUrl(c.Credentials.Server)
+	if err != nil {
+		return err
+	}
+	dailer := websocket.DefaultDialer
+	dailer.HandshakeTimeout = 5 * time.Second
+	conn, _, err := dailer.Dial(server.String(), nil)
+	if err != nil {
+		return err
+	}
+
+	log.Println("Setting up new connection")
+	c.Conn = conn
+	c.Started = make(chan struct{})
+	go c.writer()
+
+	return nil
+}
+
 // MonitorConnection periodically sends pings over the websocket connection
 // to home assistant and expects a pong message back within one second.
 // If we did not received a pong in time, a bool will be posted to the Client.PongTimeoutChannel
 // to indicate that there is a problem with the connection.
 func (c *Client) MonitorConnection() {
+	PingIntervalTimer := time.NewTicker(5 * time.Second)
 	// Periodically send a Ping
 	for {
 		select {
 		case <-c.quitPingWatchdog:
-			c.PingIntervalTimer.Stop()
+			log.Println("MonitorConnection Stopped")
 			return
-		case t := <-c.PingIntervalTimer.C:
+		case t := <-PingIntervalTimer.C:
 			log.Printf("Ping at %v", t)
 			err := c.SendCommand(NewPingCmd())
 			if err != nil {
 				log.Printf("Failed to send ping command: %v", err)
-				c.PingIntervalTimer.Stop()
+				PingIntervalTimer.Stop()
 				return
 			}
 			// Make sure we receive a pong in time
@@ -252,8 +257,9 @@ func (c *Client) MonitorConnection() {
 					case tt := <-pongTimeoutTimer.C:
 						// If not, try to restart the connection
 						log.Printf("Did not receive a pong in time %v", tt)
-
+						PingIntervalTimer.Stop()
 						pongTimeoutTimer.Stop()
+						c.quitPingWatchdog <- struct{}{}
 						c.PongTimeoutChannel <- true
 						return
 					case <-c.PongChannel:
@@ -269,8 +275,8 @@ func (c *Client) MonitorConnection() {
 // authenticate handles the authentication phase of the Home Assistant Websocket API
 func (c *Client) authenticate(msg *IncomingMessage) {
 	switch msg.Type {
-	case "auth_required":
-		log.Print("Sending authntication credentials")
+	case MessageTypeAuthRequired:
+		log.Print("Sending authentication credentials")
 		c.writeChan <- struct {
 			Type        string `json:"type"`
 			AccessToken string `json:"access_token"`
@@ -280,13 +286,13 @@ func (c *Client) authenticate(msg *IncomingMessage) {
 		}
 
 		return
-	case "auth_ok":
+	case MessageTypeAuthOK:
 		log.Print("authentication succeeded")
 		c.Authenticated = true
 		c.Ready = true
 		close(c.Started)
 		return
-	case "auth_invalid":
+	case MessageTypeAuthInvalid:
 		log.Print("authentication failed")
 		c.Authenticated = false
 		c.ListenError = NewClientError("Client.authenticate", NotAuthenticatedError)
@@ -299,9 +305,19 @@ func (c *Client) authenticate(msg *IncomingMessage) {
 
 // Close closes the websocket client.
 func (c *Client) Close() {
-	// Compare and Swap to 1 and proceed, return if already 1.
+	// Compare and Swap to 1 and proceed, return if already 1. (means that we
+	// are already closed (or in process of))
 	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
 		return
+	}
+	close(c.EventChannel)
+	close(c.ResultChannel)
+	close(c.PushNotificationChannel)
+	close(c.quitPingWatchdog)
+	close(c.PongTimeoutChannel)
+	close(c.resetTimerChan)
+	if !c.Ready {
+		close(c.Started)
 	}
 
 	c.quitWriterChan <- struct{}{}
@@ -309,8 +325,9 @@ func (c *Client) Close() {
 	_ = c.Conn.Close()
 }
 
-// TODO: un-export the Conn so that Write methods go through the writer
 func (c *Client) writer() {
+
+	c.writerRunning = true
 	for {
 		select {
 		case msg := <-c.writeChan:
@@ -320,14 +337,11 @@ func (c *Client) writer() {
 			}
 
 		case <-c.quitWriterChan:
+			c.writerRunning = false
 			return
 		}
 	}
 }
-
-// func (c *Client) SubscribeToEventType(eventType string, ch chan *IncomingEventMessage){
-
-// }
 
 // SendCommand sends a command over the websocket connection to Home Assisstant
 func (c *Client) SendCommand(command Cmd) error {

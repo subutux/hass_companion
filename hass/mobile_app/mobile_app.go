@@ -19,14 +19,14 @@ type MobileApp struct {
 	SensorCollector *sensors.Collector
 }
 
-func NewMobileApp(registration *rest.RegistrationResponse, creds *auth.Credentials, ws *ws.Client) *MobileApp {
+func NewMobileApp(registration *rest.RegistrationResponse, creds *auth.Credentials, ws *ws.Client, interval time.Duration) *MobileApp {
 	ma := MobileApp{
 		credentials:  creds,
 		Registration: registration,
 		ws:           ws,
 	}
 	webhook, _ := ma.WebhookUrl()
-	ma.SensorCollector = sensors.NewCollector(webhook, 5*time.Second)
+	ma.SensorCollector = sensors.NewCollector(webhook, interval)
 
 	return &ma
 }
