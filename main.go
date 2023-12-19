@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -17,7 +18,6 @@ import (
 	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
-	"github.com/gen2brain/beeep"
 	"github.com/godbus/dbus/v5"
 
 	"github.com/k0kubun/pp/v3"
@@ -68,7 +68,7 @@ func main() {
 		d := dialog.NewEntryDialog("Connect", "home assistant url:", func(url string) {
 			config.Set("server", url)
 			config.Save()
-			Start(statusStringLabel, Events, EventCount, w, a, waitForClose)
+			Start(statusStringLabel, Events, EventCount, a, waitForClose)
 		}, w)
 		w.Resize(fyne.Size{
 			Width:  600,
@@ -81,87 +81,108 @@ func main() {
 		d.Show()
 		w.RequestFocus()
 	} else {
-		Start(statusStringLabel, Events, EventCount, w, a, waitForClose)
+
+		statusStringLabel.SetText("Connecting ...")
+		Start(statusStringLabel, Events, EventCount, a, waitForClose)
 	}
 
 	w.ShowAndRun()
 	hass.Close()
 }
 
-func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *widget.Label, w fyne.Window, a fyne.App, closeChannel chan os.Signal) {
+func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *widget.Label, a fyne.App, closeChannel chan os.Signal) {
 	go func() {
-		server := config.Get("server")
-		var creds auth.Credentials
-		var err error
 
-		if config.Get("auth.refreshToken") == "" {
-			creds, err = auth.Initiate(server)
-			if err != nil {
-				log.Fatal(err)
-			}
-			config.Save()
-		} else {
-			creds = config.NewCredentialsFromConfig()
-		}
-		err = creds.Authorize()
-		if err != nil {
-			log.Fatal(err)
-		}
-		config.Set("server", server)
-		config.Set("auth.refreshToken", creds.RefreshToken)
-		config.Set("auth.accessToken", creds.AccessToken())
-		config.Set("auth.clientId", creds.ClientId)
-		config.Save()
+		creds := SetupAuth()
 
-		statusStringLabel.SetText("Connecting ...")
-		Connect(creds)
+		hass = Connect(creds)
 
 		go hass.MonitorConnection()
 
 		// Setup State Tracking
-		statusStringLabel.SetText("Connected: Setting up States tracking...")
-		StateStore := SetupStateTracking()
+		//StateStore := SetupStateTracking()
 
-		statusStringLabel.SetText("Connected: Subscribing to state changes ...")
 		hass.SendCommand(ws.NewSubscribeToEvents("state_changed"))
 
 		// SetupMobile
-		statusStringLabel.SetText("Connected: Registering as a mobile app...")
-		SetupMobile(creds)
+		mobile := SetupMobile(creds)
 		statusStringLabel.SetText("Connected.")
 		Events.Show()
 
 		for {
 			select {
-			case event := <-hass.EventChannel:
-				pp.Println(event)
-				ce, err := states.NewChangeEventFromIncomingEventMessage(event)
+			case <-hass.EventChannel:
+				//pp.Println(event)
+				//ce, err := states.NewChangeEventFromIncomingEventMessage(event)
 				eventCount += 1
 				EventCount.SetText(strconv.Itoa(eventCount))
-				if err == nil {
-					StateStore.HandleStateChanged(ce)
-				} else {
-					log.Printf("Error converting event to ChangeEvent: %v", err)
-				}
+				// if err == nil {
+				// 	// StateStore.HandleStateChanged(ce)
+				// } else {
+				// 	log.Printf("Error converting event to ChangeEvent: %v", err)
+				// }
 			case <-closeChannel:
 
 				statusStringLabel.SetText("disconnecting...")
+
 				hass.Close()
 				a.Quit()
 				return
 			case <-hass.PongTimeoutChannel:
 				// TODO instead of closing, restart the connection
-
 				statusStringLabel.SetText("Failed to receive a pong in time. Disconnecting ...")
-				hass.Close()
-				a.Quit()
+				// Test redial
+				mobile.SensorCollector.Stop()
+				log.Print("Trying redial")
+				var hassErr error
+				var tries int = 0
+				for hassErr != nil {
+					time.Sleep(5 * time.Second)
+					log.Printf("%v:  reconnecting (try %v)", hassErr, tries)
+					hassErr = hass.Redial()
+					tries++
+				}
+
+				statusStringLabel.SetText(fmt.Sprintf("connected after %v tries...", tries))
+				go hass.Listen()
+
+				go hass.MonitorConnection()
+
+				SetupMobile(creds)
+				log.Println("Restarted connection")
 				return
 			}
 		}
 	}()
 }
 
-func Connect(creds auth.Credentials) {
+func SetupAuth() auth.Credentials {
+	server := config.Get("server")
+	var creds auth.Credentials
+	var err error
+
+	if config.Get("auth.refreshToken") == "" {
+		creds, err = auth.Initiate(server)
+		if err != nil {
+			log.Fatal(err)
+		}
+		config.Save()
+	} else {
+		creds = config.NewCredentialsFromConfig()
+	}
+	err = creds.Authorize()
+	if err != nil {
+		log.Fatal(err)
+	}
+	config.Set("server", server)
+	config.Set("auth.refreshToken", creds.RefreshToken)
+	config.Set("auth.accessToken", creds.AccessToken())
+	config.Set("auth.clientId", creds.ClientId)
+	config.Save()
+	return creds
+}
+
+func Connect(creds auth.Credentials) *ws.Client {
 	hass, err := ws.NewClient(&creds)
 	if err != nil {
 		log.Printf("Error creating client: %s", err)
@@ -171,10 +192,10 @@ func Connect(creds auth.Credentials) {
 	go hass.Listen()
 	<-hass.Started
 
-	return
+	return hass
 }
 
-func SetupMobile(creds auth.Credentials) {
+func SetupMobile(creds auth.Credentials) *mobile_app.MobileApp {
 	rhass := rest.NewClient(&creds)
 
 	// TODO Load registration from config if exists
@@ -182,16 +203,18 @@ func SetupMobile(creds auth.Credentials) {
 	registration, err := rhass.RegisterMobileApp(reg)
 	config.Set("registration", *registration)
 
-	mobile := mobile_app.NewMobileApp(registration, &creds, hass)
+	mobile := mobile_app.NewMobileApp(registration, &creds, hass, 60*time.Second)
 	hass.SendCommandWithCallback(ws.NewGetWebhookCmd(registration.WebhookID, mobile_app.NewWebhookGetConfigCmd()), func(message *ws.IncomingResultMessage) {
 		pp.Println(message)
 	})
 	mobile.EnableWebsocketPushNotifications()
-	go mobile.WatchForPushNotifications(func(notification *ws.IncomingPushNotificationMessage) {
-		//TODO switch to https://github.com/esiqveland/notify to support actions
+	// go mobile.WatchForPushNotifications(func(notification *ws.IncomingPushNotificationMessage) {
+	// 	//TODO switch to https://github.com/esiqveland/notify to support actions
 
-		beeep.Notify("Home Assistant: "+notification.Event.Title, notification.Event.Message, "icon.png")
-	})
+	// 	beeep.Notify("Home Assistant: "+notification.Event.Title, notification.Event.Message, "icon.png")
+	// })
+
+	go mobile.WatchForPushNotifications(mobile.FreedesktopNotifier)
 
 	conn, err := dbus.SystemBus()
 	if err == nil {
@@ -213,6 +236,7 @@ func SetupMobile(creds auth.Credentials) {
 	}
 
 	go mobile.SensorCollector.Collect()
+	return mobile
 }
 
 func SetupStateTracking() *states.Store {
