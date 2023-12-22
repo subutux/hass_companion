@@ -75,6 +75,7 @@ type IncomingPushNotificationMessage struct {
 		Message string `json:"message"`
 		Target  string `json:"target"`
 		Data    struct {
+			Timeout int32 `json:"timeout"`
 			Actions []struct {
 				Action string `json:"action"`
 				Title  string `json:"title"`

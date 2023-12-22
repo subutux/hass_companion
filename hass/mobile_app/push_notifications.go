@@ -37,14 +37,23 @@ func (m *MobileApp) FreedesktopNotifier(notification *ws.IncomingPushNotificatio
 
 	log.Printf("--> Actions %v", actions)
 
-	call := obj.Call("org.freedesktop.Notifications.Notify", 0, "", uint32(0), "",
+	// Timeouts in Freedesktop Notifications are in ms
+	timeout := notification.Event.Data.Timeout * 1000
+	if timeout == 0 {
+		// Default to system timeout if timeout is zero.
+		timeout = -1
+	}
+
+	call := obj.Call("org.freedesktop.Notifications.Notify", 0, "HASS Companion",
+		uint32(0), "",
 		notification.Event.Title, notification.Event.Message,
-		actions, map[string]dbus.Variant{}, int32(-1))
+		actions, map[string]dbus.Variant{}, timeout)
 
 	if call.Err != nil {
-		log.Printf("Error sending notification %v", call.Err)
+		log.Printf("Error sending notification: %v", call.Err)
 		return
 	}
+	//notifID := call.Body[0].(int32)
 
 	// Wait for actions
 	if len(actions) > 0 {
@@ -71,7 +80,6 @@ func (m *MobileApp) FreedesktopNotifier(notification *ws.IncomingPushNotificatio
 					m.ws.SendCommand(&eventCmd)
 				}
 				conn.RemoveSignal(c)
-				//close(c)
 
 			}
 
