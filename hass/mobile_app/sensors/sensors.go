@@ -135,6 +135,8 @@ func (c *Collector) AddSensor(sensor SensorInterface) {
 
 func (c *Collector) Collect() {
 
+	c.collect()
+
 	c.StopChan = make(chan struct{})
 
 	c.ticker = time.NewTicker(c.Interval)
