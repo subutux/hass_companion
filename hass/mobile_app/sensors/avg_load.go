@@ -45,6 +45,7 @@ func DiscoverAverageLoad() (*AverageLoad, error) {
 			Name:           "load",
 			UniqueID:       "load",
 			Type:           "sensor",
+			Icon:           "mdi:cpu-64-bit",
 			EntityCategory: "diagnostic",
 			Disabled:       false,
 		},
