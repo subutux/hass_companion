@@ -1,7 +1,6 @@
 package sensors
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
@@ -28,14 +27,14 @@ func (b *Battery) Disable() {
 }
 
 func (b *Battery) Update() error {
-	if strings.HasSuffix(b.Name, "_level") {
+	if strings.HasSuffix(b.UniqueID, "_level") {
 		variant, err := b.conn.Object("org.freedesktop.UPower", b.dbusPath).
 			GetProperty("org.freedesktop.UPower.Device.Percentage")
 		if err != nil {
 			return err
 		}
 		b.State = int(variant.Value().(float64))
-	} else if strings.HasSuffix(b.Name, "_state") {
+	} else if strings.HasSuffix(b.UniqueID, "_state") {
 		variant, err := b.conn.Object("org.freedesktop.UPower", b.dbusPath).
 			GetProperty("org.freedesktop.UPower.Device.State")
 		if err != nil {
@@ -53,12 +52,12 @@ func (b *Battery) Update() error {
 }
 
 func NewBatteryLevel(systemdbus *dbus.Conn, path dbus.ObjectPath, name string, state int, disabled bool) *Battery {
-	name = name + "_level"
+	ID := name + "_level"
 
 	return &Battery{
 		Sensor: Sensor{
 			Name:              name,
-			UniqueID:          name,
+			UniqueID:          ID,
 			DeviceClass:       "battery",
 			Icon:              "mdi:battery",
 			State:             strconv.Itoa(state),
@@ -74,12 +73,13 @@ func NewBatteryLevel(systemdbus *dbus.Conn, path dbus.ObjectPath, name string, s
 }
 
 func NewBatteryState(systemdbus *dbus.Conn, path dbus.ObjectPath, name string, state bool, disabled bool) *Battery {
-	name = name + "_state"
+	ID := name + "_state"
 	return &Battery{
 		Sensor: Sensor{
 			Name:           name,
-			UniqueID:       name,
+			UniqueID:       ID,
 			DeviceClass:    "battery_charging",
+			Icon:           "mdi:battery-charging",
 			State:          strconv.FormatBool(state),
 			Type:           "binary_sensor",
 			EntityCategory: "diagnostic",
@@ -103,8 +103,6 @@ func DiscoverBatteries(systemdbus *dbus.Conn) ([]*Battery, error) {
 	}
 
 	for _, path := range s {
-		split := strings.Split(fmt.Sprint(path), "/")
-		name := split[len(split)-1]
 		percentage := 0
 		present := true
 		o := systemdbus.Object("org.freedesktop.UPower", path)
@@ -113,7 +111,14 @@ func DiscoverBatteries(systemdbus *dbus.Conn) ([]*Battery, error) {
 			return batteries, err
 		}
 		if deviceType.Value().(uint32) == 2 {
-			variant, err := o.GetProperty("org.freedesktop.UPower.Device.Percentage")
+
+			variant, err := o.GetProperty("org.freedesktop.UPower.Device.NativePath")
+			if err != nil {
+				return batteries, err
+			}
+			name := variant.Value().(string)
+
+			variant, err = o.GetProperty("org.freedesktop.UPower.Device.Percentage")
 			if err != nil {
 				return batteries, err
 			}
