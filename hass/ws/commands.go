@@ -195,5 +195,4 @@ func NewGetWebhookCmd(webhookid string, body string) *GetWebhookCmd {
 // get_panels
 // [deprecated] camera_thumbnail
 // media_player_thumbnail
-// ping
 // validate_config
