@@ -1,6 +1,7 @@
 package ws
 
 import (
+	"context"
 	"log"
 	"time"
 )
@@ -26,20 +27,23 @@ func (c *Client) MonitorConnection() {
 				return
 			}
 			// Make sure we receive a pong in time
-			pongTimeoutTimer := time.NewTicker(1 * time.Second)
+			ctx, cancel := context.WithDeadline(context.Background(),
+				time.Now().Add(1*time.Second))
+			defer cancel()
 			go func() {
 				for {
 					select {
-					case tt := <-pongTimeoutTimer.C:
-						// If not, Stop the watchdog
-						log.Printf("Did not receive a pong in time %v", tt)
-						PingIntervalTimer.Stop()
-						pongTimeoutTimer.Stop()
-						c.quitPingWatchdog <- struct{}{}
-						c.PongTimeoutChannel <- true
+					case <-ctx.Done():
+						if err := ctx.Err(); err != nil {
+							log.Printf("Did not receive a pong in time %v", err)
+							PingIntervalTimer.Stop()
+							c.quitPingWatchdog <- struct{}{}
+							c.PongTimeoutChannel <- true
+						}
+
 						return
 					case <-c.PongChannel:
-						pongTimeoutTimer.Stop()
+						cancel()
 						return
 					}
 				}
