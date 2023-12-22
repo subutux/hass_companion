@@ -32,6 +32,7 @@ import (
 
 var (
 	hass                  *ws.Client
+	a                     fyne.App
 	eventCount            int
 	retries               = 0
 	retryIntervalDuration = 5 * time.Second
@@ -40,7 +41,7 @@ var (
 
 func main() {
 
-	a := app.New()
+	a = app.New()
 	w := a.NewWindow("Companion")
 	if desk, ok := a.(desktop.App); ok {
 		m := fyne.NewMenu("Companion",
@@ -68,7 +69,8 @@ func main() {
 		d := dialog.NewEntryDialog("Connect", "home assistant url:", func(url string) {
 			config.Set("server", url)
 			config.Save()
-			Start(statusStringLabel, Events, EventCount, a, waitForClose)
+			hass = Connect(SetupAuth())
+			Start(hass, statusStringLabel, Events, EventCount, a, waitForClose)
 		}, w)
 		w.Resize(fyne.Size{
 			Width:  600,
@@ -83,19 +85,19 @@ func main() {
 	} else {
 
 		statusStringLabel.SetText("Connecting ...")
-		Start(statusStringLabel, Events, EventCount, a, waitForClose)
+
+		hass = Connect(SetupAuth())
+		Start(hass, statusStringLabel, Events, EventCount, a, waitForClose)
 	}
 
 	w.ShowAndRun()
 	hass.Close()
 }
 
-func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *widget.Label, a fyne.App, closeChannel chan os.Signal) {
+func Start(hass *ws.Client, statusStringLabel *widget.Label, Events *fyne.Container, EventCount *widget.Label, a fyne.App, closeChannel chan os.Signal) {
 	go func() {
-
-		creds := SetupAuth()
-
-		hass = Connect(creds)
+		go hass.Listen()
+		<-hass.Started
 
 		go hass.MonitorConnection()
 
@@ -105,7 +107,11 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 		hass.SendCommand(ws.NewSubscribeToEvents("state_changed"))
 
 		// SetupMobile
-		mobile := SetupMobile(creds)
+		mobile, err := SetupMobile(*hass.Credentials)
+		if err != nil {
+			log.Printf("Failed to setup mobile: %v", err)
+			a.Quit()
+		}
 		statusStringLabel.SetText("Connected.")
 		Events.Show()
 
@@ -135,20 +141,19 @@ func Start(statusStringLabel *widget.Label, Events *fyne.Container, EventCount *
 				mobile.SensorCollector.Stop()
 				log.Print("Trying redial")
 				var hassErr error
-				var tries int = 0
+				var tries int = 1
+				hassErr = hass.Redial()
 				for hassErr != nil {
-					time.Sleep(5 * time.Second)
-					log.Printf("%v:  reconnecting (try %v)", hassErr, tries)
+					log.Printf("%v: reconnecting (try %v)", hassErr, tries)
+					statusStringLabel.SetText(fmt.Sprintf("%v: reconnecting (try %v)", hassErr, tries))
+
 					hassErr = hass.Redial()
 					tries++
+					time.Sleep(5 * time.Second)
 				}
 
 				statusStringLabel.SetText(fmt.Sprintf("connected after %v tries...", tries))
-				go hass.Listen()
-
-				go hass.MonitorConnection()
-
-				SetupMobile(creds)
+				Start(hass, statusStringLabel, Events, EventCount, a, closeChannel)
 				log.Println("Restarted connection")
 				return
 			}
@@ -189,18 +194,22 @@ func Connect(creds auth.Credentials) *ws.Client {
 		os.Exit(1)
 	}
 
-	go hass.Listen()
-	<-hass.Started
-
 	return hass
 }
 
-func SetupMobile(creds auth.Credentials) *mobile_app.MobileApp {
+func SetupMobile(creds auth.Credentials) (*mobile_app.MobileApp, error) {
 	rhass := rest.NewClient(&creds)
 
-	// TODO Load registration from config if exists
-	reg := mobile_app.NewMobileAppRegistration()
+	// Load registration from config if exists
+	reg, err := config.GetStruct("registration", mobile_app.MobileAppRegistration{})
+	if err != nil {
+		// Else, register a new
+		reg = mobile_app.NewMobileAppRegistration()
+	}
 	registration, err := rhass.RegisterMobileApp(reg)
+	if err != nil {
+		return nil, err
+	}
 	config.Set("registration", *registration)
 
 	mobile := mobile_app.NewMobileApp(registration, &creds, hass, 60*time.Second)
@@ -236,7 +245,7 @@ func SetupMobile(creds auth.Credentials) *mobile_app.MobileApp {
 	}
 
 	go mobile.SensorCollector.Collect()
-	return mobile
+	return mobile, nil
 }
 
 func SetupStateTracking() *states.Store {
