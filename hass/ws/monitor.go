@@ -31,7 +31,7 @@ func (c *Client) MonitorConnection() {
 				for {
 					select {
 					case tt := <-pongTimeoutTimer.C:
-						// If not, try to restart the connection
+						// If not, Stop the watchdog
 						log.Printf("Did not receive a pong in time %v", tt)
 						PingIntervalTimer.Stop()
 						pongTimeoutTimer.Stop()

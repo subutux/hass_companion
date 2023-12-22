@@ -49,6 +49,8 @@ func (c *Client) Listen() {
 
 	var buf bytes.Buffer
 	buf.Grow(avgReadMsgSizeBytes)
+	log.Print("Starting listener")
+	defer log.Print("Exitting listener")
 
 	for {
 		// Reset buffer.
@@ -72,16 +74,15 @@ func (c *Client) Listen() {
 			log.Printf("Failed to decode from json: %s", jsonErr)
 			continue
 		}
-
 		switch msg.Type {
+		case MessageTypePong:
+			c.handlePong(raw_message)
 		case MessageTypeEvent:
 			c.handleEvent(raw_message)
 		case MessageTypeResult:
 			c.handleResult(raw_message)
 		case MessageTypeAuthRequired, MessageTypeAuthOK, MessageTypeAuthInvalid:
 			c.handleAuth(raw_message)
-		case MessageTypePong:
-			c.handlePong(raw_message)
 		default:
 			log.Printf("Unknown message type: %v for message %v", msg.Type, string(raw_message))
 		}
