@@ -5,7 +5,6 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/k0kubun/pp/v3"
 	"github.com/subutux/hass_companion/hass/auth"
 	"github.com/subutux/hass_companion/hass/mobile_app/sensors"
 	"github.com/subutux/hass_companion/hass/rest"
@@ -34,7 +33,6 @@ func NewMobileApp(registration *rest.RegistrationResponse, creds *auth.Credentia
 // WebhookUrl determines the correct URL to use for sending data back to
 // Home assistant.
 func (m *MobileApp) WebhookUrl() (string, error) {
-	pp.Println(m.Registration, m.credentials)
 	if m.Registration.CloudhookURL != "" {
 		return m.Registration.CloudhookURL, nil
 	}

@@ -1,0 +1,8 @@
+Website = "https://github.com/subutux/linux_hass_companion"
+
+[Details]
+  Icon = "Icon.png"
+  Name = "Hass Companion"
+  ID = "be.subutux.linux_hass_companion"
+  Version = "1.0.0"
+  Build = 2

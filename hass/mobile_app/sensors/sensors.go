@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/k0kubun/pp/v3"
 )
 
 type Sensor struct {
@@ -162,18 +161,19 @@ func (c *Collector) collect() {
 		for _, sensor := range s {
 			log.Printf("Collecting sensor: %v", sensor.UniqueID)
 			if !c.IsRegistered(sensor) {
-				res, err := c.RegisterSensor(sensor)
-				pp.Println(string(res), err)
-				c.RegisteredSensors = append(c.RegisteredSensors, sensor.UniqueID)
+				_, err := c.RegisterSensor(sensor)
+				if err == nil {
+					c.RegisteredSensors = append(c.RegisteredSensors, sensor.UniqueID)
+				}
 			}
 			if !c.IsDisabled(sensor) {
 				toUpdate = append(toUpdate, NewSensorUpdateFromSensor(sensor))
 			}
 		}
 	}
-	res, err := c.UpdateSensors(toUpdate)
+	_, err := c.UpdateSensors(toUpdate)
 	if err != nil {
-		pp.Println(string(res), err)
+		log.Printf("Error updating sensors:%v", err)
 	}
 }
 
@@ -184,7 +184,6 @@ func (c *Collector) Stop() {
 
 func (c *Collector) RegisterSensor(sensor *Sensor) ([]byte, error) {
 	reg := NewSensorRegistration(sensor)
-	pp.Println(reg)
 	r, err := resty.New().R().
 		SetBody(reg).
 		Post(c.Webhook)

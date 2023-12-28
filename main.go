@@ -13,14 +13,11 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/layout"
-	"fyne.io/fyne/v2/widget"
 	"github.com/godbus/dbus/v5"
-
 	"github.com/k0kubun/pp/v3"
+
 	"github.com/subutux/hass_companion/hass/auth"
 	"github.com/subutux/hass_companion/hass/mobile_app"
 	"github.com/subutux/hass_companion/hass/mobile_app/sensors"
@@ -28,6 +25,7 @@ import (
 	"github.com/subutux/hass_companion/hass/states"
 	"github.com/subutux/hass_companion/hass/ws"
 	"github.com/subutux/hass_companion/internal/config"
+	"github.com/subutux/hass_companion/internal/ui"
 )
 
 var (
@@ -43,34 +41,36 @@ func main() {
 
 	a = app.New()
 	w := a.NewWindow("Companion")
+
+	status_content := ui.NewStatusContent(&a, &w)
+	content := ui.NewMainContent(&status_content)
+
 	if desk, ok := a.(desktop.App); ok {
 		m := fyne.NewMenu("Companion",
 			fyne.NewMenuItem("Status", func() {
 				w.Show()
+				content.Select("status")
 			}))
 		desk.SetSystemTrayMenu(m)
 	}
-	statusStringLabel := widget.NewLabel("loading")
-	EventTitle := widget.NewLabel("Events received")
-	EventTitle.TextStyle = fyne.TextStyle{
-		Bold: true,
-	}
-	EventCount := widget.NewLabel("0")
-	Events := container.New(layout.NewHBoxLayout(), EventTitle, EventCount)
-	Events.Hide()
-	w.SetContent(container.New(layout.NewVBoxLayout(), statusStringLabel, Events))
+
+	w.SetContent(content.Container())
+	status_content.Status.Set(ui.StatusWaiting)
+	status_content.EventsCount.Set("0")
 	w.SetCloseIntercept(func() {
 		w.Hide()
 	})
+
 	waitForClose := make(chan os.Signal, 1)
 	signal.Notify(waitForClose, syscall.SIGINT, syscall.SIGTERM)
 	config.Load()
+	status_content.SetStatus(ui.StatusConnecting)
 	if config.Get("server") == "" {
 		d := dialog.NewEntryDialog("Connect", "home assistant url:", func(url string) {
 			config.Set("server", url)
 			config.Save()
 			hass = Connect(SetupAuth())
-			Start(hass, statusStringLabel, Events, EventCount, a, waitForClose)
+			Start(hass, &status_content, content, waitForClose)
 		}, w)
 		w.Resize(fyne.Size{
 			Width:  600,
@@ -83,19 +83,22 @@ func main() {
 		d.Show()
 		w.RequestFocus()
 	} else {
-
-		statusStringLabel.SetText("Connecting ...")
-
+		status_content.Status.Set(ui.StatusConnecting)
 		hass = Connect(SetupAuth())
-		Start(hass, statusStringLabel, Events, EventCount, a, waitForClose)
+		Start(hass, &status_content, content, waitForClose)
 	}
-
+	w.Resize(fyne.Size{
+		Width:  600,
+		Height: 400,
+	})
 	w.ShowAndRun()
 	hass.Close()
 }
 
-func Start(hass *ws.Client, statusStringLabel *widget.Label, Events *fyne.Container, EventCount *widget.Label, a fyne.App, closeChannel chan os.Signal) {
+func Start(hass *ws.Client, status *ui.StatusContent, main *ui.MainContent, closeChannel chan os.Signal) {
 	go func() {
+
+		status.Server.Set(hass.Credentials.Server)
 		go hass.Listen()
 		<-hass.Started
 
@@ -107,13 +110,13 @@ func Start(hass *ws.Client, statusStringLabel *widget.Label, Events *fyne.Contai
 		hass.SendCommand(ws.NewSubscribeToEvents("state_changed"))
 
 		// SetupMobile
-		mobile, err := SetupMobile(*hass.Credentials)
+		mobile, err := SetupMobile(*hass.Credentials, main)
 		if err != nil {
 			log.Printf("Failed to setup mobile: %v", err)
 			a.Quit()
 		}
-		statusStringLabel.SetText("Connected.")
-		Events.Show()
+
+		status.SetStatus(ui.StatusConnected)
 
 		for {
 			select {
@@ -121,7 +124,7 @@ func Start(hass *ws.Client, statusStringLabel *widget.Label, Events *fyne.Contai
 				//pp.Println(event)
 				//ce, err := states.NewChangeEventFromIncomingEventMessage(event)
 				eventCount += 1
-				EventCount.SetText(strconv.Itoa(eventCount))
+				status.EventsCount.Set(strconv.Itoa(eventCount))
 				// if err == nil {
 				// 	// StateStore.HandleStateChanged(ce)
 				// } else {
@@ -129,14 +132,13 @@ func Start(hass *ws.Client, statusStringLabel *widget.Label, Events *fyne.Contai
 				// }
 			case <-closeChannel:
 
-				statusStringLabel.SetText("disconnecting...")
-
+				status.SetStatus(ui.StatusDisconnecting)
 				hass.Close()
 				a.Quit()
 				return
 			case <-hass.PongTimeoutChannel:
-				// TODO instead of closing, restart the connection
-				statusStringLabel.SetText("Failed to receive a pong in time. Disconnecting ...")
+
+				status.SetStatus(ui.StatusDisconnecting, "Failed to receive a pong in time.")
 				// Test redial
 				mobile.SensorCollector.Stop()
 				log.Print("Trying redial")
@@ -145,15 +147,16 @@ func Start(hass *ws.Client, statusStringLabel *widget.Label, Events *fyne.Contai
 				hassErr = hass.Redial()
 				for hassErr != nil {
 					log.Printf("%v: reconnecting (try %v)", hassErr, tries)
-					statusStringLabel.SetText(fmt.Sprintf("%v: reconnecting (try %v)", hassErr, tries))
-
+					status.SetStatus(ui.StatusReconnecting, fmt.Sprintf("(try %v) %v", tries, hassErr))
 					hassErr = hass.Redial()
 					tries++
-					time.Sleep(5 * time.Second)
+					if hassErr != nil {
+						// back-off sleep when Redail failed
+						time.Sleep(5 * time.Second)
+					}
 				}
-
-				statusStringLabel.SetText(fmt.Sprintf("connected after %v tries...", tries))
-				Start(hass, statusStringLabel, Events, EventCount, a, closeChannel)
+				status.SetStatus(ui.StatusConnected, fmt.Sprintf("after %v tries...", tries))
+				Start(hass, status, main, closeChannel)
 				log.Println("Restarted connection")
 				return
 			}
@@ -197,32 +200,35 @@ func Connect(creds auth.Credentials) *ws.Client {
 	return hass
 }
 
-func SetupMobile(creds auth.Credentials) (*mobile_app.MobileApp, error) {
+func SetupMobile(creds auth.Credentials, content *ui.MainContent) (*mobile_app.MobileApp, error) {
 	rhass := rest.NewClient(&creds)
-
+	var registration *rest.RegistrationResponse
 	// Load registration from config if exists
-	reg, err := config.GetStruct("registration", mobile_app.MobileAppRegistration{})
+	reg, err := config.GetStruct("registration", registration)
 	if err != nil {
 		// Else, register a new
 		reg = mobile_app.NewMobileAppRegistration()
+		registration, err = rhass.RegisterMobileApp(reg)
+		if err != nil {
+			return nil, err
+		}
+		config.Set("registration", registration)
 	}
-	registration, err := rhass.RegisterMobileApp(reg)
-	if err != nil {
-		return nil, err
-	}
-	config.Set("registration", *registration)
 
 	mobile := mobile_app.NewMobileApp(registration, &creds, hass, 60*time.Second)
-	hass.SendCommandWithCallback(ws.NewGetWebhookCmd(registration.WebhookID, mobile_app.NewWebhookGetConfigCmd()), func(message *ws.IncomingResultMessage) {
+	cmd := ws.NewGetWebhookCmd(registration.WebhookID, mobile_app.NewWebhookGetConfigCmd())
+	pp.Println(cmd)
+	hass.SendCommandWithCallback(cmd, func(message *ws.IncomingResultMessage) {
 		pp.Println(message)
 	})
-	mobile.EnableWebsocketPushNotifications()
-	// go mobile.WatchForPushNotifications(func(notification *ws.IncomingPushNotificationMessage) {
-	// 	//TODO switch to https://github.com/esiqveland/notify to support actions
 
-	// 	beeep.Notify("Home Assistant: "+notification.Event.Title, notification.Event.Message, "icon.png")
+	data, err := rhass.GetConfig(registration.WebhookID)
+	pp.Println(data, err)
+
+	// hass.SendCommandWithCallback(ws.NewGetConfigCmd(), func(message *ws.IncomingResultMessage) {
+	// 	pp.Println(message)
 	// })
-
+	mobile.EnableWebsocketPushNotifications()
 	go mobile.WatchForPushNotifications(mobile.FreedesktopNotifier)
 
 	conn, err := dbus.SystemBus()
@@ -231,6 +237,8 @@ func SetupMobile(creds auth.Credentials) (*mobile_app.MobileApp, error) {
 		if err == nil {
 			for _, battery := range batteries {
 				mobile.SensorCollector.AddSensor(battery)
+				content.AppendSensor(battery)
+
 			}
 		}
 	}
@@ -238,10 +246,12 @@ func SetupMobile(creds auth.Credentials) (*mobile_app.MobileApp, error) {
 	memory, err := sensors.DiscoverMemory()
 	if err == nil {
 		mobile.SensorCollector.AddSensor(memory)
+		content.AppendSensor(memory)
 	}
 	load, err := sensors.DiscoverAverageLoad()
 	if err == nil {
 		mobile.SensorCollector.AddSensor(load)
+		content.AppendSensor(load)
 	}
 
 	go mobile.SensorCollector.Collect()

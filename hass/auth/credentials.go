@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
-	"github.com/k0kubun/pp/v3"
 )
 
 type Credentials struct {
@@ -50,7 +49,6 @@ func (c *Credentials) Authorize() error {
 		"code":       c.Token,
 		"client_id":  c.ClientId,
 	}
-	pp.Println(formData)
 	response, err := api.R().SetFormData(formData).SetResult(&AuthorizationResponse{}).
 		Post(endpoint.String())
 
@@ -67,10 +65,8 @@ func (c *Credentials) Authorize() error {
 }
 
 func (c *Credentials) setTokensFromResponse(authorization *AuthorizationResponse) error {
-	log.Printf("Setting accessToken = %s", authorization.AccessToken)
 	c.accessToken = authorization.AccessToken
 	if authorization.RefreshToken != "" {
-		log.Printf("Setting RefreshToken = %s", authorization.RefreshToken)
 		c.RefreshToken = authorization.RefreshToken
 	}
 	duration, err := time.ParseDuration(strconv.Itoa(authorization.ExpiresIn) + "s")
@@ -106,8 +102,6 @@ func (c *Credentials) refresh() error {
 		"client_id":     c.ClientId,
 	}).SetResult(&AuthorizationResponse{}).
 		Post(endpoint.String())
-
-	log.Printf("Status: %v data: %s", response.Status(), response.String())
 
 	if err != nil {
 

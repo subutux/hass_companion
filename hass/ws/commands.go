@@ -178,10 +178,10 @@ func (c *GetWebhookCmd) SetID(ID int64) {
 
 func NewGetWebhookCmd(webhookid string, body string) *GetWebhookCmd {
 	return &GetWebhookCmd{
-		Type:      "webhook/handle",
-		WebhookID: webhookid,
-		Body:      body,
-		Method:    "GET",
+		Type: "webhook/handle",
+		//WebhookID: webhookid,
+		Body:   body,
+		Method: "GET",
 		Headers: map[string]string{
 			"Content-Type": "application/json",
 		},
