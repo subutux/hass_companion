@@ -24,6 +24,7 @@ import (
 	"github.com/subutux/hass_companion/hass/ws"
 	"github.com/subutux/hass_companion/internal/config"
 	"github.com/subutux/hass_companion/internal/logger"
+	"github.com/subutux/hass_companion/internal/themes"
 	"github.com/subutux/hass_companion/internal/ui"
 )
 
@@ -38,6 +39,7 @@ var (
 
 func main() {
 	a = app.NewWithID("be.subutux.companion")
+	a.Settings().SetTheme(themes.HassLightTheme{})
 	w := a.NewWindow("Companion")
 
 	status_content := ui.NewStatusContent(&a, &w)
