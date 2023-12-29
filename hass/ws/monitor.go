@@ -9,8 +9,9 @@ import (
 
 // MonitorConnection periodically sends pings over the websocket connection
 // to home assistant and expects a pong message back within one second.
-// If we did not received a pong in time, a bool will be posted to the Client.PongTimeoutChannel
-// to indicate that there is a problem with the connection.
+// If we did not received a pong in time, a bool will be posted to the
+// Client.PongTimeoutChannel to indicate that there is a problem with the
+// connection.
 func (c *Client) MonitorConnection() {
 	PingIntervalTimer := time.NewTicker(5 * time.Second)
 	// Periodically send a Ping
