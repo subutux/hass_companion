@@ -139,15 +139,15 @@ func Start(hass *ws.Client, status *ui.StatusContent, main *ui.MainContent, clos
 			case <-hass.PongTimeoutChannel:
 
 				status.SetStatus(ui.StatusDisconnecting, "Failed to receive a pong in time.")
-				// Test redial
 				mobile.SensorCollector.Stop()
+				main.ResetSensors()
 				logger.I().Warn("Trying redial")
 				var hassErr error
 				var tries int = 1
 				hassErr = hass.Redial()
 				for hassErr != nil {
 					logger.I().Warn("reconnecting", "error", hassErr, "try", tries)
-					status.SetStatus(ui.StatusReconnecting, fmt.Sprintf("(try %v) %v", tries, hassErr))
+					status.SetStatus(ui.StatusReconnecting, fmt.Sprintf("(try %v)\n%v", tries, hassErr))
 					hassErr = hass.Redial()
 					tries++
 					if hassErr != nil {

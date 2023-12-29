@@ -41,6 +41,15 @@ func (m *MainContent) AppendSensor(sensor sensors.SensorInterface) {
 	m.viewsList.Reload()
 }
 
+func (m *MainContent) ResetSensors() {
+	m.sensors = []sensors.SensorInterface{}
+	m.viewNames = []string{"status"}
+	statusView := m.views["status"]
+	m.views = make(map[string]View)
+	m.views["status"] = statusView
+	m.viewsList.Reload()
+}
+
 func (m *MainContent) SetContent(name string) {
 	v, ok := m.views[name]
 
