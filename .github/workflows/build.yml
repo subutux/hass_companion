@@ -20,6 +20,18 @@ jobs:
     - uses: WillAbides/setup-go-faster@v1.8.0
       with:      
         go-version: '1.21.x'
+    - name: Get dependencies
+      run: >-
+        sudo apt-get update &&
+        sudo apt-get install
+        bc
+        gcc
+        libgl1-mesa-dev
+        libwayland-dev
+        libx11-dev
+        libxkbcommon-dev
+        xorg-dev
+        xvfb
     - name: Install fyne
       run: go install fyne.io/fyne/v2/cmd/fyne@latest
     - name: package
