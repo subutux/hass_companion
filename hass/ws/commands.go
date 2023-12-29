@@ -113,7 +113,7 @@ func NewSubscribeToPushNotificationsChannelCmd(webhookId string) *SubscribeToPus
 	return &SubscribeToPushNotificationsChannelCmd{
 		Type:           "mobile_app/push_notification_channel",
 		WebhookId:      webhookId,
-		SupportConfirm: false,
+		SupportConfirm: true,
 	}
 }
 

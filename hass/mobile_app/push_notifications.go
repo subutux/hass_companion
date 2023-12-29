@@ -53,6 +53,15 @@ func (m *MobileApp) FreedesktopNotifier(notification *ws.IncomingPushNotificatio
 		log.Printf("Error sending notification: %v", call.Err)
 		return
 	}
+	// confirm
+	if notification.Event.HassConfirmId != "" {
+		m.ws.SendCommand(
+			ws.NewOutgoingPushNotificationConfirmation(
+				m.Registration.WebhookID,
+				notification.Event.HassConfirmId),
+		)
+	}
+
 	//notifID := call.Body[0].(int32)
 
 	// Wait for actions

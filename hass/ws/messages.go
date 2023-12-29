@@ -127,3 +127,22 @@ type State struct {
 		UserID   string      `json:"user_id"`
 	} `json:"context"`
 }
+
+type OutgoingPushNotificationConfirmation struct {
+	ID        int64  `json:"id"`
+	Type      string `json:"type"`
+	WebhookID string `json:"webhook_id"`
+	ConfirmID string `json:"confirm_id"`
+}
+
+func (c *OutgoingPushNotificationConfirmation) SetID(ID int64) {
+	c.ID = ID
+}
+
+func NewOutgoingPushNotificationConfirmation(webhookID, confirmID string) *OutgoingPushNotificationConfirmation {
+	return &OutgoingPushNotificationConfirmation{
+		Type:      "mobile_app/push_notification_confirm",
+		WebhookID: webhookID,
+		ConfirmID: confirmID,
+	}
+}
