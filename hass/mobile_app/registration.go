@@ -1,9 +1,10 @@
 package mobile_app
 
 import (
-	"log"
+	"os"
 
 	"github.com/shirou/gopsutil/v3/host"
+	"github.com/subutux/hass_companion/internal/logger"
 )
 
 type MobileAppRegistration struct {
@@ -25,11 +26,13 @@ type MobileAppRegistration struct {
 func NewMobileAppRegistration() *MobileAppRegistration {
 	OSInfo, err := host.Info()
 	if err != nil {
-		log.Fatalf("Unable to determine system: %s", err)
+		logger.I().Error("Unable to determine system", "error", err)
+		os.Exit(1)
 	}
 	info, err := GetServerInformation()
 	if err != nil {
-		log.Fatalf("Unable to determine system: %s", err)
+		logger.I().Error("Unable to determine system", "error", err)
+		os.Exit(1)
 	}
 	return &MobileAppRegistration{
 		DeviceID:           OSInfo.HostID,

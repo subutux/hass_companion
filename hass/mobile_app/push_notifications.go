@@ -1,10 +1,9 @@
 package mobile_app
 
 import (
-	"log"
-
 	"github.com/godbus/dbus/v5"
 	"github.com/subutux/hass_companion/hass/ws"
+	"github.com/subutux/hass_companion/internal/logger"
 )
 
 // EnableWebsocketPushNotifications sends a command to Home Assistant that
@@ -17,7 +16,7 @@ func (m *MobileApp) EnableWebsocketPushNotifications() {
 // whenever there is a push notification received on the websocket connection.
 func (m *MobileApp) WatchForPushNotifications(callback func(notification *ws.IncomingPushNotificationMessage)) {
 	for notification := range m.ws.PushNotificationChannel {
-		log.Printf("NOTIFY %v", notification)
+		logger.I().Info("Got notification", "notification", notification)
 		callback(notification)
 	}
 }
@@ -35,7 +34,7 @@ func (m *MobileApp) FreedesktopNotifier(notification *ws.IncomingPushNotificatio
 		actions = append(actions, a.Action, a.Title)
 	}
 
-	log.Printf("--> Actions %v", actions)
+	logger.I().Debug("Actions", "actions", actions)
 
 	// Timeouts in Freedesktop Notifications are in ms
 	timeout := notification.Event.Data.Timeout * 1000
@@ -50,7 +49,7 @@ func (m *MobileApp) FreedesktopNotifier(notification *ws.IncomingPushNotificatio
 		actions, map[string]dbus.Variant{}, timeout)
 
 	if call.Err != nil {
-		log.Printf("Error sending notification: %v", call.Err)
+		logger.I().Error("Error sending notification", "error", call.Err)
 		return
 	}
 	// confirm
@@ -73,9 +72,9 @@ func (m *MobileApp) FreedesktopNotifier(notification *ws.IncomingPushNotificatio
 			)
 			c := make(chan *dbus.Signal, 10)
 			conn.Signal(c)
-			log.Print("Waiting for action")
+			logger.I().Debug("Waiting for action")
 			for v := range c {
-				log.Printf("---> ACTION:: %v", v)
+				logger.I().Debug("Handling action", "action", v)
 				if len(v.Body) == 2 && v.Name == "org.freedesktop.Notifications.ActionInvoked" {
 
 					// TODO handle action

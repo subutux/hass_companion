@@ -1,11 +1,11 @@
 package sensors
 
 import (
-	"log"
 	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/subutux/hass_companion/internal/logger"
 )
 
 type Sensor struct {
@@ -143,9 +143,9 @@ func (c *Collector) Collect() {
 	for {
 		select {
 		case <-c.StopChan:
-			log.Println("Stopping collector")
+			logger.I().Info("Stopping collector")
 			c.ticker.Stop()
-			log.Println("Stopped collector")
+			logger.I().Info("Stopped collector")
 			return
 		case <-c.ticker.C:
 			c.collect()
@@ -154,12 +154,12 @@ func (c *Collector) Collect() {
 }
 
 func (c *Collector) collect() {
-	log.Printf("Collecting sensors...")
+	logger.I().Info("Collecting sensors...")
 	var toUpdate []*SensorUpdate
 	for _, _sensors := range c.Sensors {
 		s := _sensors.GetSensors()
 		for _, sensor := range s {
-			log.Printf("Collecting sensor: %v", sensor.UniqueID)
+			logger.I().Debug("Collecting sensor", "sensor", sensor.UniqueID)
 			if !c.IsRegistered(sensor) {
 				_, err := c.RegisterSensor(sensor)
 				if err == nil {
@@ -173,7 +173,7 @@ func (c *Collector) collect() {
 	}
 	_, err := c.UpdateSensors(toUpdate)
 	if err != nil {
-		log.Printf("Error updating sensors:%v", err)
+		logger.I().Error("Error updating sensors", "error", err)
 	}
 }
 

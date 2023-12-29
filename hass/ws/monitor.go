@@ -2,8 +2,9 @@ package ws
 
 import (
 	"context"
-	"log"
 	"time"
+
+	"github.com/subutux/hass_companion/internal/logger"
 )
 
 // MonitorConnection periodically sends pings over the websocket connection
@@ -16,13 +17,13 @@ func (c *Client) MonitorConnection() {
 	for {
 		select {
 		case <-c.quitPingWatchdog:
-			log.Println("MonitorConnection Stopped")
+			logger.I().Warn("MonitorConnection Stopped")
 			return
 		case t := <-PingIntervalTimer.C:
-			log.Printf("Ping at %v", t)
+			logger.I().Info("Ping", "t", t)
 			err := c.SendCommand(NewPingCmd())
 			if err != nil {
-				log.Printf("Failed to send ping command: %v", err)
+				logger.I().Error("Failed to send ping command", "error", err)
 				PingIntervalTimer.Stop()
 				return
 			}
@@ -35,7 +36,7 @@ func (c *Client) MonitorConnection() {
 					select {
 					case <-ctx.Done():
 						if err := ctx.Err(); err != nil {
-							log.Printf("Did not receive a pong in time %v", err)
+							logger.I().Error("Did not receive a pong in time %v", "error", err)
 							PingIntervalTimer.Stop()
 							c.quitPingWatchdog <- struct{}{}
 							c.PongTimeoutChannel <- true

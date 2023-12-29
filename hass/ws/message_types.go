@@ -14,6 +14,7 @@ const (
 	MessageTypePong                          = "pong"
 	MessageTypeGetStates                     = "get_states"
 	MessageTypeGetServices                   = "get_services"
+	MessageTypeGetConfig                     = "get_config"
 	MessageTypeGetEntityRegistry             = "config/entity_registry/list"
 	MessageTypeGetDeviceRegistry             = "config/device_registry/list"
 	MessageTypeResult                        = "result"

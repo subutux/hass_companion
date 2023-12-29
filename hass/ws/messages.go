@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"time"
-
-	"github.com/k0kubun/pp/v3"
 )
 
 type IncomingMessage struct {
@@ -46,7 +44,6 @@ type IncomingResultMessage struct {
 
 func IncomingResultMessageFromJSON(data []byte) (*IncomingResultMessage, error) {
 	var msg IncomingResultMessage
-	pp.Println(string(data))
 	if err := json.NewDecoder(bytes.NewReader(data)).Decode(&msg); err != nil {
 		return nil, err
 	}

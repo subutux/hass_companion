@@ -3,12 +3,13 @@ package ws
 import (
 	"bytes"
 	"errors"
-	"log"
+	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/subutux/hass_companion/hass/auth"
+	"github.com/subutux/hass_companion/internal/logger"
 )
 
 const avgReadMsgSizeBytes = 1024
@@ -47,10 +48,11 @@ type Client struct {
 // Listen starts the read loop of the websocket client.
 func (c *Client) Listen() {
 
+	log := logger.I()
 	var buf bytes.Buffer
 	buf.Grow(avgReadMsgSizeBytes)
-	log.Print("Starting listener")
-	defer log.Print("Exitting listener")
+	log.Info("Starting listener")
+	defer log.Info("Exitting listener")
 
 	for {
 		// Reset buffer.
@@ -71,7 +73,7 @@ func (c *Client) Listen() {
 		raw_message := buf.Bytes()
 		msg, jsonErr := IncomingMessageFromJSON(raw_message)
 		if jsonErr != nil {
-			log.Printf("Failed to decode from json: %s", jsonErr)
+			log.Error("Failed to decode result from json", "error", jsonErr)
 			continue
 		}
 		switch msg.Type {
@@ -84,7 +86,7 @@ func (c *Client) Listen() {
 		case MessageTypeAuthRequired, MessageTypeAuthOK, MessageTypeAuthInvalid:
 			c.handleAuth(raw_message)
 		default:
-			log.Printf("Unknown message type: %v for message %v", msg.Type, string(raw_message))
+			log.Warn("Unknown message", "type", msg.Type, "message", string(raw_message))
 		}
 	}
 }
@@ -93,7 +95,8 @@ func (c *Client) Listen() {
 // keeping the application running. This is needed for when the connection
 // to Home Assistant is lost and we want to try to reconnect.
 func (c *Client) Redial() error {
-	log.Println("Redialing")
+	log := logger.I()
+	log.Warn("Redialing")
 	if c.writerRunning {
 
 		c.quitWriterChan <- struct{}{}
@@ -110,7 +113,7 @@ func (c *Client) Redial() error {
 		return err
 	}
 
-	log.Println("Setting up new connection")
+	log.Info("Setting up new connection")
 	c.Conn = conn
 	c.Started = make(chan struct{})
 	go c.writer()
@@ -120,6 +123,8 @@ func (c *Client) Redial() error {
 
 // Close closes the websocket client.
 func (c *Client) Close() {
+	logger.I().Warn("Closing client")
+	defer logger.I().Warn("Closed client")
 	// Compare and Swap to 1 and proceed, return if already 1. (means that we
 	// are already closed (or in process of))
 	if !atomic.CompareAndSwapInt32(&c.closed, 0, 1) {
@@ -148,7 +153,7 @@ func (c *Client) writer() {
 		case msg := <-c.writeChan:
 			err := c.Conn.WriteJSON(msg)
 			if err != nil {
-				log.Printf("failed to write to writeChan: %v", err)
+				logger.I().Error("failed to write to writeChan", "error", err)
 			}
 
 		case <-c.quitWriterChan:
@@ -164,7 +169,7 @@ func (c *Client) SendCommand(command Cmd) error {
 		return NotAuthenticatedError
 	}
 	command.SetID(c.Sequence)
-
+	logger.I().Info("send", "id", c.Sequence, "type", fmt.Sprintf("%T", command))
 	c.Sequence++
 	c.writeChan <- command
 	return nil

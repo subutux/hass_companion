@@ -1,20 +1,24 @@
 package ws
 
-import "log"
+import (
+	"github.com/subutux/hass_companion/internal/logger"
+)
 
 func (c *Client) handlePong(message []byte) {
+	log := logger.I()
 	result, jsonErr := IncomingPongMessageFromJSON(message)
 	if jsonErr != nil {
-		log.Printf("Failed to decode result from json: %s", jsonErr)
+		log.Error("Failed to decode result from json", "error", jsonErr)
 	} else {
 		c.PongChannel <- result
 	}
 }
 
 func (c *Client) handleAuth(message []byte) error {
+	log := logger.I()
 	result, err := IncomingMessageFromJSON(message)
 	if err != nil {
-		log.Printf("Failed to decode result from json: %s", err)
+		log.Error("Failed to decode result from json", "error", err)
 		return err
 	} else {
 		c.authenticate(result)
@@ -23,41 +27,40 @@ func (c *Client) handleAuth(message []byte) error {
 }
 
 func (c *Client) handleEvent(message []byte) error {
+	log := logger.I()
 	// First, try to decode it as an push notification
 	notification, jsonErr := IncomingPushNotificationMessageFromJSON(message)
 	if jsonErr != nil {
-		log.Printf("Failed to decode event from json: %s", jsonErr)
+		log.Error("Failed to decode result from json", "error", jsonErr)
 		return jsonErr
 	} else if notification.Event.Message != "" {
-		log.Printf("received push notification %v", string(message))
-
+		log.Info("received push notification", "message", string(message))
 		c.PushNotificationChannel <- notification
-
 	}
 	// then continue to event processing
 	event, jsonErr := IncomingEventMessageFromJSON(message)
 	if jsonErr != nil {
-		log.Printf("Failed to decode event from json: %s", jsonErr)
+		log.Error("Failed to decode result from json", "error", jsonErr)
 		return jsonErr
 	} else {
-		log.Printf("received %s event", event.Event.EventType)
+		log.Info("received event", "type", event.Event.EventType)
 		c.EventChannel <- event
-
 	}
 	return nil
 }
 
 func (c *Client) handleResult(message []byte) error {
+	log := logger.I()
 	msg, err := IncomingResultMessageFromJSON(message)
 	if err != nil {
-		log.Printf("Failed to decode result from json: %s", err)
+		log.Error("Failed to decode result from json", "error", err)
 		return err
 	} else {
-		log.Printf("received result with error %v and success %v", msg.Error, msg.Success)
+		log.Info("received result", "error", msg.Error, "success", msg.Success)
 		// first check if we have a callback set for this id
 		cb, ok := c.callbacks[msg.ID]
 		if ok {
-			log.Printf("Calling callback for id %v", msg.ID)
+			log.Debug("Calling callback", "callback id", msg.ID)
 			cb(msg)
 			// Delete the callback afterwards
 			delete(c.callbacks, msg.ID)

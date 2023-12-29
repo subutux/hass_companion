@@ -3,12 +3,12 @@ package auth
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net/url"
 	"strconv"
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	"github.com/subutux/hass_companion/internal/logger"
 )
 
 type Credentials struct {
@@ -92,7 +92,7 @@ func (c *Credentials) refresh() error {
 	if !c.shouldRefresh() {
 		return nil
 	}
-	log.Print("refreshing token")
+	logger.I().Info("refreshing token")
 	endpoint, _ := url.Parse(c.Server)
 	endpoint.Path = "/auth/token"
 	api := resty.New().SetTimeout(5 * time.Second)
@@ -105,7 +105,7 @@ func (c *Credentials) refresh() error {
 
 	if err != nil {
 
-		log.Printf("error requesting token: %s", err)
+		logger.I().Error("error requesting token", "error", err)
 		return err
 	}
 

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"os/signal"
 	"strconv"
@@ -16,7 +15,6 @@ import (
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/driver/desktop"
 	"github.com/godbus/dbus/v5"
-	"github.com/k0kubun/pp/v3"
 
 	"github.com/subutux/hass_companion/hass/auth"
 	"github.com/subutux/hass_companion/hass/mobile_app"
@@ -25,6 +23,7 @@ import (
 	"github.com/subutux/hass_companion/hass/states"
 	"github.com/subutux/hass_companion/hass/ws"
 	"github.com/subutux/hass_companion/internal/config"
+	"github.com/subutux/hass_companion/internal/logger"
 	"github.com/subutux/hass_companion/internal/ui"
 )
 
@@ -38,8 +37,7 @@ var (
 )
 
 func main() {
-
-	a = app.New()
+	a = app.NewWithID("be.subutux.companion")
 	w := a.NewWindow("Companion")
 
 	status_content := ui.NewStatusContent(&a, &w)
@@ -112,7 +110,7 @@ func Start(hass *ws.Client, status *ui.StatusContent, main *ui.MainContent, clos
 		// SetupMobile
 		mobile, err := SetupMobile(*hass.Credentials, main)
 		if err != nil {
-			log.Printf("Failed to setup mobile: %v", err)
+			logger.I().Error("Failed to setup mobile", "error", err)
 			a.Quit()
 		}
 
@@ -141,12 +139,12 @@ func Start(hass *ws.Client, status *ui.StatusContent, main *ui.MainContent, clos
 				status.SetStatus(ui.StatusDisconnecting, "Failed to receive a pong in time.")
 				// Test redial
 				mobile.SensorCollector.Stop()
-				log.Print("Trying redial")
+				logger.I().Warn("Trying redial")
 				var hassErr error
 				var tries int = 1
 				hassErr = hass.Redial()
 				for hassErr != nil {
-					log.Printf("%v: reconnecting (try %v)", hassErr, tries)
+					logger.I().Warn("reconnecting", "error", hassErr, "try", tries)
 					status.SetStatus(ui.StatusReconnecting, fmt.Sprintf("(try %v) %v", tries, hassErr))
 					hassErr = hass.Redial()
 					tries++
@@ -157,7 +155,7 @@ func Start(hass *ws.Client, status *ui.StatusContent, main *ui.MainContent, clos
 				}
 				status.SetStatus(ui.StatusConnected, fmt.Sprintf("after %v tries...", tries))
 				Start(hass, status, main, closeChannel)
-				log.Println("Restarted connection")
+				logger.I().Info("Restarted connection")
 				return
 			}
 		}
@@ -172,7 +170,8 @@ func SetupAuth() auth.Credentials {
 	if config.Get("auth.refreshToken") == "" {
 		creds, err = auth.Initiate(server)
 		if err != nil {
-			log.Fatal(err)
+			logger.I().Error("Failed to initiate authentication", "error", err)
+			os.Exit(1)
 		}
 		config.Save()
 	} else {
@@ -180,7 +179,7 @@ func SetupAuth() auth.Credentials {
 	}
 	err = creds.Authorize()
 	if err != nil {
-		log.Fatal(err)
+		logger.I().Error("Failed to authorize", "error", err)
 	}
 	config.Set("server", server)
 	config.Set("auth.refreshToken", creds.RefreshToken)
@@ -193,7 +192,7 @@ func SetupAuth() auth.Credentials {
 func Connect(creds auth.Credentials) *ws.Client {
 	hass, err := ws.NewClient(&creds)
 	if err != nil {
-		log.Printf("Error creating client: %s", err)
+		logger.I().Error("Error creating client", "error", err)
 		os.Exit(1)
 	}
 
@@ -216,14 +215,14 @@ func SetupMobile(creds auth.Credentials, content *ui.MainContent) (*mobile_app.M
 	}
 
 	mobile := mobile_app.NewMobileApp(registration, &creds, hass, 60*time.Second)
-	cmd := ws.NewGetWebhookCmd(registration.WebhookID, mobile_app.NewWebhookGetConfigCmd())
-	pp.Println(cmd)
-	hass.SendCommandWithCallback(cmd, func(message *ws.IncomingResultMessage) {
-		pp.Println(message)
-	})
+	//cmd := ws.NewGetWebhookCmd(registration.WebhookID, mobile_app.NewWebhookGetConfigCmd())
+	// cmd := ws.NewGetConfigCmd()
+	// hass.SendCommandWithCallback(cmd, func(message *ws.IncomingResultMessage) {
+	// 	pp.Println(message)
+	// })
 
-	data, err := rhass.GetConfig(registration.WebhookID)
-	pp.Println(data, err)
+	// data, err := rhass.GetConfig(registration.WebhookID)
+	// pp.Println(data, err)
 
 	// hass.SendCommandWithCallback(ws.NewGetConfigCmd(), func(message *ws.IncomingResultMessage) {
 	// 	pp.Println(message)
@@ -262,7 +261,7 @@ func SetupStateTracking() *states.Store {
 	StateStore := states.Store{}
 	hass.SendCommandWithCallback(ws.NewGetStatesCmd(), func(message *ws.IncomingResultMessage) {
 		if !message.Success {
-			log.Printf("home assistant responded with %s: %s", message.Error.Code, message.Error.Message)
+			logger.I().Warn("Unsuccessfull response from Home Assistant", "error", message.Error)
 			return
 		}
 		data, err := json.Marshal(message.Result)
@@ -271,7 +270,7 @@ func SetupStateTracking() *states.Store {
 		}
 		err = json.Unmarshal(data, &StateStore.States)
 		if err != nil {
-			log.Printf("failed to decode json result to States: %v", err)
+			logger.I().Error("failed to decode json result to States", "error", err)
 		}
 
 	})

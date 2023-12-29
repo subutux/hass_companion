@@ -2,13 +2,13 @@ package config
 
 import (
 	"encoding/json"
-	"log"
 	"os"
 	"path"
 
 	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/viper"
 	"github.com/subutux/hass_companion/hass/auth"
+	"github.com/subutux/hass_companion/internal/logger"
 )
 
 func Load() error {
@@ -31,7 +31,7 @@ func Load() error {
 		return err
 	}
 
-	log.Printf("config loaded: %s", viper.ConfigFileUsed())
+	logger.I().Info("config loaded", "file", viper.ConfigFileUsed())
 	return nil
 }
 
