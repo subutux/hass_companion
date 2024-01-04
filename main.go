@@ -231,6 +231,12 @@ func SetupMobile(creds auth.Credentials, content *ui.MainContent) (*mobile_app.M
 	// })
 	mobile.EnableWebsocketPushNotifications()
 	go mobile.WatchForPushNotifications(mobile.FreedesktopNotifier)
+	go func() {
+		err := mobile.MonitorLocation()
+		if err != nil {
+			logger.I().Error("Failed to monitor location", "error", err)
+		}
+	}()
 
 	conn, err := dbus.SystemBus()
 	if err == nil {

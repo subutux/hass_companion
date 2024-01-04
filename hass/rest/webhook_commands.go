@@ -1,10 +1,14 @@
-package mobile_app
-
-import "encoding/json"
+package rest
 
 type WebhookCmd struct {
 	Type string `json:"type"`
 	Data any    `json:"data,omitempty"`
+}
+
+func NewWebhookGetConfigCmd() WebhookCmd {
+	return WebhookCmd{
+		Type: "get_config",
+	}
 }
 
 type GeoData struct {
@@ -15,25 +19,4 @@ type GeoData struct {
 	Altitude         int       `json:"altitude,omitempty"`
 	Course           int       `json:"course,omitempty"`
 	VerticalAccuracy int       `json:"vertical_accuracy,omitempty"`
-}
-
-func NewWebhookGetConfigCmd() string {
-	data, _ := json.Marshal(WebhookCmd{
-		Type: "get_config",
-	})
-
-	return string(data)
-}
-
-func NewWebhookUpdateLocationCmd(location *Location) string {
-
-	data, _ := json.Marshal(WebhookCmd{
-		Type: "update_location",
-		Data: GeoData{
-			Gps:         []float64{location.Latitude, location.Longitude},
-			GpsAccuracy: int(location.Accuracy),
-		},
-	})
-
-	return string(data)
 }

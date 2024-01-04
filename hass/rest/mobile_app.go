@@ -8,18 +8,7 @@ type RegistrationResponse struct {
 	Secret       string `json:"secret"`
 	WebhookID    string `json:"webhook_id"`
 }
-type WebhookCmd struct {
-	Type string `json:"type"`
-	Data any    `json:"data,omitempty"`
-}
 
-func NewWebhookGetConfigCmd() string {
-	data, _ := json.Marshal(WebhookCmd{
-		Type: "get_config",
-	})
-
-	return string(data)
-}
 func (c *Client) RegisterMobileApp(registration interface{}) (*RegistrationResponse, error) {
 	response, err := c.Api().R().
 		SetBody(registration).
@@ -29,9 +18,15 @@ func (c *Client) RegisterMobileApp(registration interface{}) (*RegistrationRespo
 }
 
 func (c *Client) GetConfig(webhookID string) (string, error) {
-
+	return c.SendCmd(webhookID, NewWebhookGetConfigCmd())
+}
+func (c *Client) SendCmd(webhookID string, cmd WebhookCmd) (string, error) {
+	data, err := json.Marshal(cmd)
+	if err != nil {
+		return "", err
+	}
 	response, err := c.Api().R().
-		SetBody(NewWebhookGetConfigCmd()).
+		SetBody(string(data)).
 		Post("/api/webhook/" + webhookID)
 
 	return string(response.Body()), err
